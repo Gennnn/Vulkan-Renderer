@@ -2,7 +2,7 @@
 #define SHADER_AS_STRING_H
 
 // Reads a file into an std::string 
-std::string ReadFileIntoString(const char* filePath)
+inline std::string ReadFileIntoString(const char* filePath)
 {
 	std::string output;
 	unsigned int stringLength = 0;

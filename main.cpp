@@ -9,25 +9,19 @@
 #define GATEWARE_DISABLE_GRASTERSURFACE // we have another template for this
 #define GATEWARE_DISABLE_GOPENGLSURFACE // we have another template for this
 
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-
 #define GATEWARE_ENABLE_MATH
 #define GATEWARE_ENABLE_INPUT
 
 #define KHRONOS_STATIC
 // With what we want & what we don't defined we can include the API
 #include "Gateware.h"
-#include "FileIntoString.h"
 #include "TinyGLTF/tiny_gltf.h"
 #include "Defines.h"
-#include "ktxvulkan.h"
+#include "ktx/include/ktxvulkan.h"
 #include "Materials/TextureUtilsKTX.h"
-#include "ColorFind.h"
 #include <dxcapi.h>
 #include <wrl/client.h>
-#include "renderer.h"
+#include "Render/Renderer.h"
 
 
 // open some namespaces to compact the code a bit
@@ -87,18 +81,7 @@ int main()
 				best.face, best.x, best.y, best.lum, best.r, best.g, best.b);*/
 			while (+win.ProcessWindowEvents() && renderer.alive)
 			{
-				renderer.UpdateCamera();
-				
-				unsigned int frame;
-				vulkan.GetSwapchainCurrentFrame(frame);
-				renderer.UpdateSceneData(frame);
-				renderer.RenderShadowPass(frame);
-				renderer.SubmitShadowPass(frame);
-				if (+vulkan.StartFrame(2, clrAndDepth))
-				{	
-					renderer.Render(frame);
-					vulkan.EndFrame(true);
-				}
+				renderer.RenderFrame();
 			}
 		}
 	}

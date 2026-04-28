@@ -1,11 +1,18 @@
 #ifndef TEXTUREUTILS_H
 #define TEXTUREUTILS_H
 
-// Requires tinygltf.h and Gateware.h
-// Verison 2.0, 01-05-2025. Supports SRGB colorspace options, removes redundant vkBuffer  
+#include "TinyGLTF/tiny_gltf.h"
+#include "TinyGLTF/stb_image.h"
 
+#include "Gateware.h"
+#include "ktx/include/ktx.h"
+#include "ktx/include/ktxvulkan.h"
+
+#include <cmath>
+#include <cstring>
+#include <string>
 // function to upload a texture to the GPU
-void UploadTextureToGPU(GW::GRAPHICS::GVulkanSurface _surface, const tinygltf::Image& _img,
+inline void UploadTextureToGPU(GW::GRAPHICS::GVulkanSurface _surface, const tinygltf::Image& _img,
     VkDeviceMemory& _outTextureMemory, VkImage& _outTextureImage, 
     VkImageView& _outTextureImageView, bool _linearColorSpace = true)
 {
@@ -66,7 +73,7 @@ void UploadTextureToGPU(GW::GRAPHICS::GVulkanSurface _surface, const tinygltf::I
 }
 
 // same as above but can be passed a file instead
-void UploadTextureToGPU(GW::GRAPHICS::GVulkanSurface _surface, const std::string& _file,
+inline void UploadTextureToGPU(GW::GRAPHICS::GVulkanSurface _surface, const std::string& _file,
     VkDeviceMemory& _outTextureMemory, VkImage& _outTextureImage, 
     VkImageView& _outTextureImageView, bool _linearColorSpace = true)
 {
@@ -85,7 +92,7 @@ void UploadTextureToGPU(GW::GRAPHICS::GVulkanSurface _surface, const std::string
     stbi_image_free(data);
 }
 
-VkResult CreateSampler(GW::GRAPHICS::GVulkanSurface _surface, VkSampler& _outSampler,
+inline VkResult CreateSampler(GW::GRAPHICS::GVulkanSurface _surface, VkSampler& _outSampler,
     VkSamplerAddressMode _addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
     VkFilter _filter = VK_FILTER_LINEAR, float _anisotropy = 4.0f, VkBorderColor borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE, VkBool32 compareEnable = VK_FALSE, VkCompareOp compareOp = VK_COMPARE_OP_LESS, VkBool32 unnormalizedCoords = VK_FALSE) {
     // grab all the needed handles

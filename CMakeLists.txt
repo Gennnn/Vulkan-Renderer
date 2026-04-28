@@ -1,90 +1,181 @@
 cmake_minimum_required(VERSION 3.25)
 
 set(PROJECT_NAME Vulkan_Lab_Seven)
-project(${PROJECT_NAME})
+project(${PROJECT_NAME} LANGUAGES CXX)
 
-# Enable C++17 for all targets
+# C++ settings
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF) # optional: disables compiler-specific extensions like GNU extensions 
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} 
-	PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+# Visual Studio startup project
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME}
+)
 
-ADD_DEFINITIONS(-DUNICODE)
-ADD_DEFINITIONS(-D_UNICODE)
+# Unicode on Windows
+add_definitions(-DUNICODE -D_UNICODE)
 
-file(GLOB SOURCE_FILES CONFIGURE_DEPENDS ./*.h ./*.cpp)
-file(GLOB SHADER_FILES CONFIGURE_DEPENDS ./*.hlsl ./*.glsl)
-file(GLOB MODEL_FILES CONFIGURE_DEPENDS ./TinyGLTF/*.h ./TinyGLTF/*.hpp ./TinyGLTF/*.cpp)
-
-include_directories(${CMAKE_SOURCE_DIR}/ktx/include)
-
-if(WIN32)
-        # by default CMake selects "ALL_BUILD" as the startup project
-        set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} 
-	PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
-	#this will tell Visual Studio to put the shaders under their own group in the solution explorer 
-	set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-   	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${VERTEX_SHADERS})
-        source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${PIXEL_SHADERS})
-	#Find the libraries
-	
+if (MSVC)
+    # shaderc_combined.lib in Vulkan expects the DLL runtime in this setup
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
 endif()
 
-# currently using unicode on win32
-ADD_DEFINITIONS(-DUNICODE)
-ADD_DEFINITIONS(-D_UNICODE)
+# ------------------------------------------------------------
+# Source collection
+# ------------------------------------------------------------
+
+file(GLOB_RECURSE PROJECT_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+)
+
+file(GLOB_RECURSE PROJECT_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
+)
+
+file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.glsl"
+)
+
+# Do not let recursive globbing pick up generated/build output.
+list(FILTER PROJECT_SOURCES EXCLUDE REGEX ".*/Solution/.*")
+list(FILTER PROJECT_HEADERS EXCLUDE REGEX ".*/Solution/.*")
+list(FILTER SHADER_FILES EXCLUDE REGEX ".*/Solution/.*")
+
+list(FILTER PROJECT_SOURCES EXCLUDE REGEX ".*/build/.*")
+list(FILTER PROJECT_HEADERS EXCLUDE REGEX ".*/build/.*")
+list(FILTER SHADER_FILES EXCLUDE REGEX ".*/build/.*")
+
+list(FILTER PROJECT_SOURCES EXCLUDE REGEX ".*/out/.*")
+list(FILTER PROJECT_HEADERS EXCLUDE REGEX ".*/out/.*")
+list(FILTER SHADER_FILES EXCLUDE REGEX ".*/out/.*")
+
+add_executable(${PROJECT_NAME}
+    ${PROJECT_SOURCES}
+    ${PROJECT_HEADERS}
+    ${SHADER_FILES}
+)
+
+# ------------------------------------------------------------
+# Include directories
+# ------------------------------------------------------------
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+
+    # Current/refactor folders
+    "${CMAKE_CURRENT_SOURCE_DIR}/Render"
+    "${CMAKE_CURRENT_SOURCE_DIR}/App"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Platform"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Core"
+    "${CMAKE_CURRENT_SOURCE_DIR}/RHI"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Scene"
+
+    # Third-party/local includes
+    "${CMAKE_SOURCE_DIR}/ktx/include"
+	"${CMAKE_SOURCE_DIR}/dxc/lib"
+)
+
+# Vulkan SDK
+if (DEFINED ENV{VULKAN_SDK})
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        "$ENV{VULKAN_SDK}/Include"
+    )
+
+    target_link_directories(${PROJECT_NAME} PRIVATE
+        "$ENV{VULKAN_SDK}/Lib"
+    )
+else()
+    message(FATAL_ERROR "VULKAN_SDK environment variable is not set.")
+endif()
+
+# ------------------------------------------------------------
+# Platform-specific linking
+# ------------------------------------------------------------
 
 if (WIN32)
-	# shaderc_combined.lib in Vulkan requires this for debug & release (runtime shader compiling)
-	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-	add_executable (${PROJECT_NAME} ${SOURCE_FILES} ${SHADER_FILES} ${MODEL_FILES})
-	target_include_directories(${PROJECT_NAME} PUBLIC $ENV{VULKAN_SDK}/Include/)
-	target_link_directories(${PROJECT_NAME} PUBLIC $ENV{VULKAN_SDK}/Lib/)
-	find_library(KTX_LIB_D NAMES ktx_x64_d PATHS ${CMAKE_SOURCE_DIR}/ktx/lib)
-	find_library(KTX_LIB_R NAMES ktx_x64_r PATHS ${CMAKE_SOURCE_DIR}/ktx/lib)
-	find_library(DXCOMPILER_LIB NAMES dxcompiler PATHS ${CMAKE_SOURCE_DIR}/dxc/lib)
-	# Link the libraries
-	target_link_libraries(Vulkan_Lab_Seven debug ${KTX_LIB_D} optimized ${KTX_LIB_R})
-	target_link_libraries(Vulkan_Lab_Seven debug ${DXCOMPILER_LIB})
-endif(WIN32)
+    find_library(KTX_LIB_D
+        NAMES ktx_x64_d
+        PATHS "${CMAKE_SOURCE_DIR}/ktx/lib"
+    )
 
-if(UNIX AND NOT APPLE)
-	# libshaderc_combined.a is required for runtime shader compiling
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -lX11 -lshaderc_combined")
-        find_package(X11)
-	find_package(Vulkan REQUIRED)
-        link_libraries(${X11_LIBRARIES})
-        include_directories(${X11_INCLUDE_DIR})
-        include_directories(${Vulkan_INCLUDE_DIR}) 
-	link_libraries(${Vulkan_LIBRARIES})
-        link_libraries(/usr/lib/x86_64-linux-gnu/libshaderc_combined.a)
-        add_executable (${PROJECT_NAME} ${SOURCE_FILES} ${SHADER_FILES})
-endif(UNIX AND NOT APPLE)
+    find_library(KTX_LIB_R
+        NAMES ktx_x64_r
+        PATHS "${CMAKE_SOURCE_DIR}/ktx/lib"
+    )
 
-if(APPLE)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fmodules -fcxx-modules")
-	set(Architecture ${CMAKE_OSX_ARCHITECTURES})
-	find_package(Vulkan REQUIRED)
-	include_directories(${Vulkan_INCLUDE_DIR}) 
-	#link_directories(${Vulkan_LIBRARY}) this is currently not working
-	link_libraries(${Vulkan_LIBRARIES})
-	# libshaderc_combined.a is required for runtime shader compiling
-	# the path is (properly)hardcoded because "${Vulkan_LIBRARY}" currently does not 
-	# return a proper path on MacOS (it has the .dynlib appended)
-	link_libraries(/usr/local/lib/libshaderc_combined.a)
-	add_executable (${PROJECT_NAME} main.mm)
-endif(APPLE)
+    find_library(DXCOMPILER_LIB
+        NAMES dxcompiler
+        PATHS "${CMAKE_SOURCE_DIR}/dxc/lib"
+    )
 
-#exclude shaders from build, we compile at run-time
-set_source_files_properties(${SHADER_FILES} PROPERTIES VS_TOOL_OVERRIDE "none")
+    if (NOT KTX_LIB_D)
+        message(FATAL_ERROR "Could not find debug KTX library: ktx_x64_d")
+    endif()
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND git add --all || true
-	COMMAND git commit -a -m "auto commit on %DATE% %TIME%" || true
-	COMMAND git push
-	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-	VERBATIM USES_TERMINAL
+    if (NOT KTX_LIB_R)
+        message(FATAL_ERROR "Could not find release KTX library: ktx_x64_r")
+    endif()
+
+    if (NOT DXCOMPILER_LIB)
+        message(FATAL_ERROR "Could not find dxcompiler.lib in ${CMAKE_SOURCE_DIR}/dxc/lib")
+    endif()
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        debug ${KTX_LIB_D}
+        optimized ${KTX_LIB_R}
+        ${DXCOMPILER_LIB}
+    )
+endif()
+
+if (UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+    find_package(Vulkan REQUIRED)
+
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${X11_INCLUDE_DIR}
+        ${Vulkan_INCLUDE_DIR}
+    )
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${X11_LIBRARIES}
+        ${Vulkan_LIBRARIES}
+        pthread
+        /usr/lib/x86_64-linux-gnu/libshaderc_combined.a
+    )
+endif()
+
+if (APPLE)
+    find_package(Vulkan REQUIRED)
+
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${Vulkan_INCLUDE_DIR}
+    )
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${Vulkan_LIBRARIES}
+        /usr/local/lib/libshaderc_combined.a
+    )
+endif()
+
+# ------------------------------------------------------------
+# Visual Studio organization
+# ------------------------------------------------------------
+
+set_source_files_properties(${SHADER_FILES}
+    PROPERTIES VS_TOOL_OVERRIDE "none"
 )
+
+if (WIN32)
+    set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+    source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES
+        ${PROJECT_SOURCES}
+        ${PROJECT_HEADERS}
+        ${SHADER_FILES}
+    )
+endif()
 

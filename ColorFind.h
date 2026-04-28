@@ -1,4 +1,4 @@
-#include <ktx.h>
+#include "ktx/include/ktx.h"
 #include <cmath>
 #include <cstdint>
 #include <limits>

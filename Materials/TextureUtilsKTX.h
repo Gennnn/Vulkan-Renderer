@@ -3,8 +3,13 @@
 
 // Requires KTX Texture Library and Gateware.h
 
+#include "../Gateware.h"
+#include "../TinyGLTF/tiny_gltf.h"
+#include "../ktx/include/ktx.h"
+#include "../ktx/include/ktxvulkan.h"
+
 // function to upload a texture to the GPU
-bool UploadKTXTextureToGPU(	GW::GRAPHICS::GVulkanSurface _surface, const std::string& _ktx_img,
+inline bool UploadKTXTextureToGPU(	GW::GRAPHICS::GVulkanSurface _surface, const std::string& _ktx_img,
 							VkBuffer& _outTextureBuffer, VkDeviceMemory& _outTextureMemory,
 							VkImage& _outTextureImage, VkImageView& _outTextureImageView)
 {

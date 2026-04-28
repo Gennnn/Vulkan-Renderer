@@ -1,11 +1,38 @@
-// minimalistic code to draw a single triangle, this is not part of the API.
-#include "shaderc/shaderc.h" // needed for compiling shaders at runtime
+#pragma once
 
-#include "TextureUtils.h"
-#ifdef _WIN32 // must use MT platform DLL libraries on windows
-#pragma comment(lib, "shaderc_combined.lib") 
+#define GATEWARE_ENABLE_CORE
+#define GATEWARE_ENABLE_SYSTEM
+#define GATEWARE_ENABLE_GRAPHICS
+#define GATEWARE_ENABLE_MATH
+#define GATEWARE_ENABLE_INPUT
+
+#define GATEWARE_DISABLE_GDIRECTX11SURFACE
+#define GATEWARE_DISABLE_GDIRECTX12SURFACE
+#define GATEWARE_DISABLE_GRASTERSURFACE
+#define GATEWARE_DISABLE_GOPENGLSURFACE
+
+#include <vulkan/vulkan.h>
+
+
+#include "../Gateware.h"
+
+#include "../Defines.h"
+#include "../FileIntoString.h"
+#include "../TextureUtils.h"
+#include "../Materials/TextureUtilsKTX.h"
+#include "../TinyGLTF/tiny_gltf.h"
+#include <dxcapi.h>
+#include <wrl/client.h>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <iostream>
+
+#if defined WIN32
+#include <Windows.h>
 #endif
-
 #define FOV 65
 #define FAR_PLANE 10000.0f
 #define NEAR_PLANE 0.1f
@@ -14,7 +41,7 @@
 #define SHADOW_CASCADE_COUNT 4
 #define SHADOW_DISTANCE 80
 
-void PrintLabeledDebugString(const char* label, const char* toPrint)
+inline void PrintLabeledDebugString(const char* label, const char* toPrint)
 {
 	std::cout << label << toPrint << std::endl;
 
@@ -352,6 +379,8 @@ public:
 		InitializeGraphics();
 		BindShutdownCallback();
 	}
+
+
 
 private:
 	void UpdateWindowDimensions()
@@ -1639,58 +1668,58 @@ private:
 
 	}
 
-	shaderc_compile_options_t CreateCompileOptions()
-	{
-		shaderc_compile_options_t retval = shaderc_compile_options_initialize();
-		shaderc_compile_options_set_source_language(retval, shaderc_source_language_hlsl);
-		shaderc_compile_options_set_invert_y(retval, false);	
-#ifndef NDEBUG
-		shaderc_compile_options_set_generate_debug_info(retval);
-#endif
-		return retval;
-	}
-
-	void CompileVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
-	{
-		std::string vertexShaderSource = ReadFileIntoString("../VertexShader.hlsl");
-		
-		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
-			compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
-			shaderc_vertex_shader, "main.vert", "main", options);
-
-		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
-		{
-			PrintLabeledDebugString("Vertex Shader Errors: \n", shaderc_result_get_error_message(result));
-			abort(); //Vertex shader failed to compile! 
-			return;
-		}
-
-		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
-			(char*)shaderc_result_get_bytes(result), &vertexShader);
-
-		shaderc_result_release(result); // done
-	}
-
-	void CompileShadowVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
-	{
-		std::string vertexShaderSource = ReadFileIntoString("../ShadowVertexShader.hlsl");
-
-		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
-			compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
-			shaderc_vertex_shader, "main.vert", "main", options);
-
-		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
-		{
-			PrintLabeledDebugString("Vertex Shader Errors: \n", shaderc_result_get_error_message(result));
-			abort(); //Vertex shader failed to compile! 
-			return;
-		}
-
-		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
-			(char*)shaderc_result_get_bytes(result), &shadowVertexShader);
-
-		shaderc_result_release(result); // done
-	}
+//	shaderc_compile_options_t CreateCompileOptions()
+//	{
+//		shaderc_compile_options_t retval = shaderc_compile_options_initialize();
+//		shaderc_compile_options_set_source_language(retval, shaderc_source_language_hlsl);
+//		shaderc_compile_options_set_invert_y(retval, false);	
+//#ifndef NDEBUG
+//		shaderc_compile_options_set_generate_debug_info(retval);
+//#endif
+//		return retval;
+//	}
+//
+//	void CompileVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
+//	{
+//		std::string vertexShaderSource = ReadFileIntoString("../VertexShader.hlsl");
+//		
+//		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
+//			compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
+//			shaderc_vertex_shader, "main.vert", "main", options);
+//
+//		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
+//		{
+//			PrintLabeledDebugString("Vertex Shader Errors: \n", shaderc_result_get_error_message(result));
+//			abort(); //Vertex shader failed to compile! 
+//			return;
+//		}
+//
+//		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
+//			(char*)shaderc_result_get_bytes(result), &vertexShader);
+//
+//		shaderc_result_release(result); // done
+//	}
+//
+//	void CompileShadowVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
+//	{
+//		std::string vertexShaderSource = ReadFileIntoString("../ShadowVertexShader.hlsl");
+//
+//		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
+//			compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
+//			shaderc_vertex_shader, "main.vert", "main", options);
+//
+//		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
+//		{
+//			PrintLabeledDebugString("Vertex Shader Errors: \n", shaderc_result_get_error_message(result));
+//			abort(); //Vertex shader failed to compile! 
+//			return;
+//		}
+//
+//		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
+//			(char*)shaderc_result_get_bytes(result), &shadowVertexShader);
+//
+//		shaderc_result_release(result); // done
+//	}
 
 	void CompileVertexShader_DXC()
 	{
@@ -2188,68 +2217,68 @@ private:
 	}
 	
 
-	void CompileShadowFragmentShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
-	{
-		std::string fragmentShaderSource = ReadFileIntoString("../ShadowFragmentShader.hlsl");
+	//void CompileShadowFragmentShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
+	//{
+	//	std::string fragmentShaderSource = ReadFileIntoString("../ShadowFragmentShader.hlsl");
 
-		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
-			compiler, fragmentShaderSource.c_str(), fragmentShaderSource.length(),
-			shaderc_fragment_shader, "main.frag", "main", options);
+	//	shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
+	//		compiler, fragmentShaderSource.c_str(), fragmentShaderSource.length(),
+	//		shaderc_fragment_shader, "main.frag", "main", options);
 
-		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
-		{
-			PrintLabeledDebugString("Fragment Shader Errors: \n", shaderc_result_get_error_message(result));
-			abort(); //Fragment shader failed to compile! 
-			return;
-		}
+	//	if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
+	//	{
+	//		PrintLabeledDebugString("Fragment Shader Errors: \n", shaderc_result_get_error_message(result));
+	//		abort(); //Fragment shader failed to compile! 
+	//		return;
+	//	}
 
-		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
-			(char*)shaderc_result_get_bytes(result), &shadowFragmentShader);
+	//	GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
+	//		(char*)shaderc_result_get_bytes(result), &shadowFragmentShader);
 
-		shaderc_result_release(result); // done
-	}
+	//	shaderc_result_release(result); // done
+	//}
 
-	void CompileSkyboxVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
-	{
-		std::string vertexShaderSource = ReadFileIntoString("../SkyboxVertexShader.hlsl");
+	//void CompileSkyboxVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
+	//{
+	//	std::string vertexShaderSource = ReadFileIntoString("../SkyboxVertexShader.hlsl");
 
-		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
-			compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
-			shaderc_vertex_shader, "main.vert", "main", options);
+	//	shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
+	//		compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
+	//		shaderc_vertex_shader, "main.vert", "main", options);
 
-		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
-		{
-			PrintLabeledDebugString("Vertex Shader Errors: \n", shaderc_result_get_error_message(result));
-			abort(); //Vertex shader failed to compile! 
-			return;
-		}
+	//	if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
+	//	{
+	//		PrintLabeledDebugString("Vertex Shader Errors: \n", shaderc_result_get_error_message(result));
+	//		abort(); //Vertex shader failed to compile! 
+	//		return;
+	//	}
 
-		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
-			(char*)shaderc_result_get_bytes(result), &skyboxVertexShader);
+	//	GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
+	//		(char*)shaderc_result_get_bytes(result), &skyboxVertexShader);
 
-		shaderc_result_release(result); // done
-	}
+	//	shaderc_result_release(result); // done
+	//}
 
-	void CompileSkyboxFragmentShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
-	{
-		std::string fragmentShaderSource = ReadFileIntoString("../SkyboxFragmentShader.hlsl");
+	//void CompileSkyboxFragmentShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
+	//{
+	//	std::string fragmentShaderSource = ReadFileIntoString("../SkyboxFragmentShader.hlsl");
 
-		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
-			compiler, fragmentShaderSource.c_str(), fragmentShaderSource.length(),
-			shaderc_fragment_shader, "main.frag", "main", options);
+	//	shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
+	//		compiler, fragmentShaderSource.c_str(), fragmentShaderSource.length(),
+	//		shaderc_fragment_shader, "main.frag", "main", options);
 
-		if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
-		{
-			PrintLabeledDebugString("Fragment Shader Errors: \n", shaderc_result_get_error_message(result));
-			abort(); //Fragment shader failed to compile! 
-			return;
-		}
+	//	if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) // errors?
+	//	{
+	//		PrintLabeledDebugString("Fragment Shader Errors: \n", shaderc_result_get_error_message(result));
+	//		abort(); //Fragment shader failed to compile! 
+	//		return;
+	//	}
 
-		GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
-			(char*)shaderc_result_get_bytes(result), &skyboxFragmentShader);
+	//	GvkHelper::create_shader_module(device, shaderc_result_get_length(result), // load into Vulkan
+	//		(char*)shaderc_result_get_bytes(result), &skyboxFragmentShader);
 
-		shaderc_result_release(result); // done
-	}
+	//	shaderc_result_release(result); // done
+	//}
 
 	// Create Pipeline & Layout (Thanks Tiny!)
 	void InitializeGraphicsPipeline()
@@ -3207,88 +3236,6 @@ private:
 		vkWaitForFences(device, 1, &bloomFences[frame], VK_TRUE, UINT64_MAX);
 	}
 
-
-public:
-	/*void Render(unsigned int currentFrame)
-	{
-		VkCommandBuffer commandBuffer = GetCurrentCommandBuffer(currentFrame);
-
-		SetUpSkyboxPipeline(commandBuffer);
-
-		
-		VkDescriptorSet sets[] = { descriptorSets[currentFrame], textureDescriptorSet, cubeTextureDescriptorSet };
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 3, sets, 0, nullptr);
-
-		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
-		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-		SetUpPipeline(commandBuffer);
-		VkBuffer buffers[] = { geometryHandle, geometryHandle,geometryHandle,geometryHandle };
-		for (int i = 0; i < primitivesToDraw.size(); i++) {
-			VkDeviceSize offsets[] = { bufferByteOffsets[primitivesToDraw[i].instanceIndex][0], bufferByteOffsets[primitivesToDraw[i].instanceIndex][1], bufferByteOffsets[primitivesToDraw[i].instanceIndex][2] ,bufferByteOffsets[primitivesToDraw[i].instanceIndex][3] };
-			vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
-			
-			vkCmdDrawIndexed(commandBuffer, primitivesToDraw[i].indexCount, 1, primitivesToDraw[i].firstIndex, primitivesToDraw[i].vertexOffset, primitivesToDraw[i].instanceIndex);
-		}
-	}*/
-
-	void Render(unsigned int currentFrame) {
-		UpdateWindowDimensions();
-
-		QueueBloomCommand(currentFrame);
-		SubmitBloomCommand(currentFrame);
-
-		VkCommandBuffer commandBuffer = GetCurrentCommandBuffer(currentFrame);
-
-		VkViewport viewport = CreateViewportFromWindowDimensions();
-		VkRect2D scissor = CreateScissorFromWindowDimensions();
-
-		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-
-		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomCompositePipeline);
-
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomCompositePipelineLayout, 0, 1, &bloomCompositeSets[currentFrame], 0, nullptr);
-
-		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-	}
-
-	void LockCursorToWindow() {
-#if defined(_WIN32) 
-		bool captured = false;
-		win.IsFocus(captured);
-		if (!captured) return;
-		GW::SYSTEM::UNIVERSAL_WINDOW_HANDLE universalWindowHandle = {};
-		win.GetWindowHandle(universalWindowHandle);
-		HWND hwnd = static_cast<HWND>(universalWindowHandle.window);
-
-		RECT client;
-		GetClientRect(hwnd, &client);
-
-		POINT ul{ client.left, client.top };
-		POINT lr{ client.right, client.bottom };
-
-		ClientToScreen(hwnd, &ul);
-		ClientToScreen(hwnd, &lr);
-
-		RECT clip{ ul.x, ul.y, lr.x, lr.y };
-		ClipCursor(&clip);
-		cursorCaptured = true;
-		while (ShowCursor(FALSE) >= 0);
-#endif
-
-	}
-
-	void UnlockCursor() {
-#if defined(_WIN32)
-		bool captured = false;
-		win.IsFocus(captured);
-		if (!captured) return;
-		ClipCursor(nullptr);
-		cursorCaptured = false;
-		while (ShowCursor(TRUE) < 0);
-#endif
-	}
-
 	void UpdateCamera() {
 
 		std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
@@ -3322,7 +3269,7 @@ public:
 			return;
 		}
 
-		
+
 
 
 		GW::MATH::GMATRIXF viewMatrix = {};
@@ -3387,7 +3334,7 @@ public:
 		float totalYaw = G_DEGREE_TO_RADIAN(FOV) * aspectRatio * LOOK_SENS * dt * x / windowWidth + cInputs.right * thumbSpeed;
 		GW::MATH::GMATRIXF yawMatrix;
 		GW::MATH::GVECTORF position = viewMatrix.row4;
-		
+
 		mathProxy.RotateYGlobalF(GW::MATH::GIdentityMatrixF, totalYaw, yawMatrix);
 		mathProxy.MultiplyMatrixF(viewMatrix, yawMatrix, viewMatrix);
 		viewMatrix.row4 = position;
@@ -3395,9 +3342,102 @@ public:
 		//manipulation
 		mathProxy.InverseF(viewMatrix, viewMatrix);
 		sceneData.viewMatrix = viewMatrix;
+
+
+
+	}
+
+
+public:
+	/*void Render(unsigned int currentFrame)
+	{
+		VkCommandBuffer commandBuffer = GetCurrentCommandBuffer(currentFrame);
+
+		SetUpSkyboxPipeline(commandBuffer);
+
 		
+		VkDescriptorSet sets[] = { descriptorSets[currentFrame], textureDescriptorSet, cubeTextureDescriptorSet };
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 3, sets, 0, nullptr);
+
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
+		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+		SetUpPipeline(commandBuffer);
+		VkBuffer buffers[] = { geometryHandle, geometryHandle,geometryHandle,geometryHandle };
+		for (int i = 0; i < primitivesToDraw.size(); i++) {
+			VkDeviceSize offsets[] = { bufferByteOffsets[primitivesToDraw[i].instanceIndex][0], bufferByteOffsets[primitivesToDraw[i].instanceIndex][1], bufferByteOffsets[primitivesToDraw[i].instanceIndex][2] ,bufferByteOffsets[primitivesToDraw[i].instanceIndex][3] };
+			vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
+			
+			vkCmdDrawIndexed(commandBuffer, primitivesToDraw[i].indexCount, 1, primitivesToDraw[i].firstIndex, primitivesToDraw[i].vertexOffset, primitivesToDraw[i].instanceIndex);
+		}
+	}*/
+
+	void RenderFrame();
+
+	
+
+	void LockCursorToWindow() {
+#if defined(_WIN32) 
+		bool captured = false;
+		win.IsFocus(captured);
+		if (!captured) return;
+		GW::SYSTEM::UNIVERSAL_WINDOW_HANDLE universalWindowHandle = {};
+		win.GetWindowHandle(universalWindowHandle);
+		HWND hwnd = static_cast<HWND>(universalWindowHandle.window);
+
+		RECT client;
+		GetClientRect(hwnd, &client);
+
+		POINT ul{ client.left, client.top };
+		POINT lr{ client.right, client.bottom };
+
+		ClientToScreen(hwnd, &ul);
+		ClientToScreen(hwnd, &lr);
+
+		RECT clip{ ul.x, ul.y, lr.x, lr.y };
+		ClipCursor(&clip);
+		cursorCaptured = true;
+		while (ShowCursor(FALSE) >= 0);
+#endif
+
+	}
+
+	void UnlockCursor() {
+#if defined(_WIN32)
+		bool captured = false;
+		win.IsFocus(captured);
+		if (!captured) return;
+		ClipCursor(nullptr);
+		cursorCaptured = false;
+		while (ShowCursor(TRUE) < 0);
+#endif
+	}
+
+	
 
 
+	
+
+private:
+
+	void Render(unsigned int currentFrame) {
+		UpdateWindowDimensions();
+
+		QueueBloomCommand(currentFrame);
+		SubmitBloomCommand(currentFrame);
+
+		VkCommandBuffer commandBuffer = GetCurrentCommandBuffer(currentFrame);
+
+		VkViewport viewport = CreateViewportFromWindowDimensions();
+		VkRect2D scissor = CreateScissorFromWindowDimensions();
+
+		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomCompositePipeline);
+
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomCompositePipelineLayout, 0, 1, &bloomCompositeSets[currentFrame], 0, nullptr);
+
+		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 	}
 
 	void SubmitShadowPass(unsigned int frame) {
@@ -3459,7 +3499,7 @@ public:
 			for (int i = 0; i < primitivesToDraw.size(); i++) {
 				VkDeviceSize offsets[] = { bufferByteOffsets[primitivesToDraw[i].instanceIndex][0], bufferByteOffsets[primitivesToDraw[i].instanceIndex][1], bufferByteOffsets[primitivesToDraw[i].instanceIndex][2] ,bufferByteOffsets[primitivesToDraw[i].instanceIndex][3] };
 				vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
-				
+
 				vkCmdDrawIndexed(commandBuffer, primitivesToDraw[i].indexCount, 1, primitivesToDraw[i].firstIndex, primitivesToDraw[i].vertexOffset, primitivesToDraw[i].instanceIndex);
 			}
 			vkCmdEndRenderPass(commandBuffer);
@@ -3473,17 +3513,16 @@ public:
 		/*for (int i = 0; i < SHADOW_CASCADE_COUNT; i++) {
 			mathProxy.MultiplyMatrixF(sceneData.projectionMatrix, sceneData.viewMatrix, sceneData.lightViewProjectionMatrices[i]);
 		}*/
-		
+
 		GvkHelper::write_to_buffer(device, uniformData[currentFrame], &sceneData, sizeof(sceneData));
-		
-		
+
+
 		GvkHelper::write_to_buffer(device, storageData[currentFrame], objectData.data(), sizeof(INSTANCE_DATA) * objectData.size());
-		
+
 		GvkHelper::write_to_buffer(device, materialStorageData[currentFrame], materialData.data(), sizeof(Material) * materialData.size());
-		
+
 	}
 
-private:
 	void UpdateCascades() {
 		float cascadeSplits[SHADOW_CASCADE_COUNT];
 
