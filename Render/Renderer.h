@@ -1,26 +1,14 @@
 #pragma once
 
-#define GATEWARE_ENABLE_CORE
-#define GATEWARE_ENABLE_SYSTEM
-#define GATEWARE_ENABLE_GRAPHICS
-#define GATEWARE_ENABLE_MATH
-#define GATEWARE_ENABLE_INPUT
+#include "../Core/GatewareConfig.h"
 
-#define GATEWARE_DISABLE_GDIRECTX11SURFACE
-#define GATEWARE_DISABLE_GDIRECTX12SURFACE
-#define GATEWARE_DISABLE_GRASTERSURFACE
-#define GATEWARE_DISABLE_GOPENGLSURFACE
-
-#include <vulkan/vulkan.h>
-
-
-#include "../Gateware.h"
-
+#include "RenderConfig.h"
 #include "../Defines.h"
 #include "../FileIntoString.h"
 #include "../TextureUtils.h"
 #include "../Materials/TextureUtilsKTX.h"
 #include "../TinyGLTF/tiny_gltf.h"
+
 #include <dxcapi.h>
 #include <wrl/client.h>
 #include <array>
@@ -30,16 +18,13 @@
 #include <vector>
 #include <iostream>
 
+using namespace GW::GRAPHICS;
+
 #if defined WIN32
 #include <Windows.h>
 #endif
-#define FOV 65
-#define FAR_PLANE 10000.0f
-#define NEAR_PLANE 0.1f
-#define LOOK_SENS 160.0f
-#define CAMERA_SPEED 5
+
 #define SHADOW_CASCADE_COUNT 4
-#define SHADOW_DISTANCE 80
 
 inline void PrintLabeledDebugString(const char* label, const char* toPrint)
 {
@@ -59,6 +44,7 @@ class Renderer
 	// proxy handles
 	GW::SYSTEM::GWindow win;
 	GW::GRAPHICS::GVulkanSurface vlk;
+	RendererConfig config;
 	VkRenderPass renderPass;
 	GW::CORE::GEventReceiver shutdown;
 	
@@ -80,7 +66,7 @@ class Renderer
 
 	tinygltf::Model model;
 	tinygltf::TinyGLTF loader;
-	std::string fileName = "../Sponza/glTF/Sponza.gltf";
+	std::string fileName;
 	std::string err;
 	std::string warn;
 	unsigned int indexCount;
@@ -142,7 +128,7 @@ class Renderer
 		unsigned int sampler;
 	};
 
-	std::vector<std::string> texturePaths = { "../Models/Textures/lut_ggx.png", "../Models/Textures/diffuse.ktx2", "../Models/Textures/specular.ktx2", "../Models/Textures/skybox_rgba8.ktx2"};
+	std::vector<std::string> texturePaths;
 	
 	unsigned int brdfIndex = 0;
 	unsigned int diffuseIndex = 1;
@@ -209,7 +195,7 @@ class Renderer
 	VkSampler shadowSampler;
 	VkRenderPass shadowRenderPass;
 	VkPipeline shadowPipeline;
-	unsigned int shadowMapSize = 2048;
+	unsigned int shadowMapSize = 0;
 	unsigned int graphicsQueueFamilyIndex = UINT32_MAX;
 	VkQueue graphicsQueue;
 	VkCommandPool shadowCommandPool;
@@ -289,14 +275,34 @@ class Renderer
 public:
 	bool alive = true;
 
-	Renderer(GW::SYSTEM::GWindow _win, GW::GRAPHICS::GVulkanSurface _vlk)
+	Renderer(GW::SYSTEM::GWindow _win, GW::GRAPHICS::GVulkanSurface _vlk, const RendererConfig& _config)
 	{
 		win = _win;
 		vlk = _vlk;
+		config = _config;
 
 		startTime = std::chrono::steady_clock::now();
 
+		fileName = config.startupScenePath;
+
 		bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, fileName);
+
+		if (!warn.empty()) {
+			std::cout << "glTF warning: " << warn << std::endl;
+		}
+		if (!err.empty()) {
+			std::cout << "glTF error: " << err << std::endl;
+		}
+		if (!ret) {
+			std::cout << "Failed to load glTF scene: " << fileName << std::endl;
+			alive = false;
+			return;
+		}
+
+		texturePaths = { config.brdfLutPath, config.diffuseIrradiancePath, config.specularPrefilterPath, config.skyboxPath };
+
+		shadowMapSize = config.shadowMapSize;
+
 		GetPrimitiveData();
 		GetTextureData();
 		UpdateWindowDimensions();
@@ -332,15 +338,28 @@ public:
 
 		}
 		scale = model.nodes[0].scale;
+		
+		LoadEnvironmentTextures();
+
+		BuildInitialObjectData();
+
+		InitializeGraphics();
+		BindShutdownCallback();
+	}
+
+
+
+private:
+	void LoadEnvironmentTextures() {
 		for (int i = 0; i < texturePaths.size(); i++) {
 			std::string texPath = texturePaths[i];
 			std::string extension = texPath.substr(texPath.find_last_of('.'));
-			
+
 			unsigned int ind;
 			if (extension == ".png") {
 				texData.push_back(TextureData{});
 				ind = texData.size() - 1;
-				
+
 				UploadTextureToGPU(vlk, texturePaths[i], texData[ind].memory, texData[ind].image, texData[ind].imageView);
 
 				if (i == brdfIndex) {
@@ -350,7 +369,7 @@ public:
 			else if (extension == ".ktx2") {
 				cubeTexData.push_back(TextureData{});
 				ind = cubeTexData.size() - 1;
-				
+
 				UploadKTXTextureToGPU(vlk, texturePaths[i], cubeTexData[ind].buffer, cubeTexData[ind].memory, cubeTexData[ind].image, cubeTexData[ind].imageView);
 
 				if (i == specularIndex) {
@@ -364,25 +383,21 @@ public:
 					//std::cout << "Skybox ind: " << ind;
 				}
 			}
-			
+
 			//CreateSampler(vlk, samplers[i]);
 		}
-		
+	}
+
+	void BuildInitialObjectData() {
 		objectData.resize(primitivesToDraw.size());
 		GW::MATH::GMATRIXF scaleMatrix = { scale[0], 0, 0, 0, 0, scale[1], 0, 0, 0, 0, scale[2], 0, 0, 0, 0, 1 };
 		for (int i = 0; i < objectData.size(); i++) {
-			 mathProxy.MultiplyMatrixF(GW::MATH::GIdentityMatrixF, scaleMatrix, objectData[i].worldMatrix);
-			 objectData[i].materialIndex = primitivesToDraw[i].matIndex;
-			 objectData[i].samplerIndex = 0;
+			mathProxy.MultiplyMatrixF(GW::MATH::GIdentityMatrixF, scaleMatrix, objectData[i].worldMatrix);
+			objectData[i].materialIndex = primitivesToDraw[i].matIndex;
+			objectData[i].samplerIndex = 0;
 		}
-
-		InitializeGraphics();
-		BindShutdownCallback();
 	}
 
-
-
-private:
 	void UpdateWindowDimensions()
 	{
 		win.GetClientWidth(windowWidth);
@@ -421,8 +436,8 @@ private:
 	void CreatePerspectiveMatrix(GW::MATH::GMATRIXF& matrix) {
 		float aspectRatio = 0.0f;
 		vlk.GetAspectRatio(aspectRatio);
-		float fov = G_DEGREE_TO_RADIAN(FOV);
-		mathProxy.ProjectionVulkanLHF(fov, aspectRatio, FAR_PLANE, NEAR_PLANE, matrix);
+		float fov = G_DEGREE_TO_RADIAN_F(config.fovDegrees);
+		mathProxy.ProjectionVulkanLHF(fov, aspectRatio, config.farPlane, config.nearPlane, matrix);
 	}
 
 	/*void CreateLightMatrices() {
@@ -433,7 +448,7 @@ private:
 		GW::MATH::GVECTORF up = { 0,1,0,0 };
 		mathProxy.LookAtLHF(lightPosition, center, up, sceneData.lightViewMatrix);
 
-		mathProxy.ProjectionVulkanLHF(G_DEGREE_TO_RADIAN(60), 1, NEAR_PLANE, FAR_PLANE, sceneData.lightProjectionMatrix);
+		mathProxy.ProjectionVulkanLHF(G_DEGREE_TO_RADIAN(60), 1, config.nearPlane, config.farPlane, sceneData.lightProjectionMatrix);
 	}*/
 
 	void GetTextureData() {
@@ -690,6 +705,7 @@ private:
 	void CreateGeometryBuffer(const void* data, unsigned int sizeInBytes)
 	{
 		VkDeviceSize offset = 0;
+		
 		GvkHelper::create_buffer(physicalDevice, device, sizeInBytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&geometryHandle, &geometryData);
@@ -3298,10 +3314,10 @@ private:
 		controllerProxy.GetState(0, G_LY_AXIS, cInputs.fwd);
 		z = kInputs.fwd - kInputs.back + cInputs.fwd;
 
-		viewMatrix.row4.y += y * CAMERA_SPEED * dt;
+		viewMatrix.row4.y += y * config.cameraSpeed * dt;
 
-		translateVector.x = x * dt * CAMERA_SPEED;
-		translateVector.z = z * dt * CAMERA_SPEED;
+		translateVector.x = x * dt * config.cameraSpeed;
+		translateVector.z = z * dt * config.cameraSpeed;
 		translateVector.y = 0;
 
 
@@ -3317,7 +3333,7 @@ private:
 
 		controllerProxy.GetState(0, G_RY_AXIS, cInputs.up);
 		float thumbSpeed = G_PI_F * dt;
-		float pitchDelta = (dt * LOOK_SENS * G_DEGREE_TO_RADIAN(FOV) * y / windowHeight) + cInputs.up * -thumbSpeed;
+		float pitchDelta = (dt * config.lookSens * G_DEGREE_TO_RADIAN(config.fovDegrees) * y / windowHeight) + cInputs.up * -thumbSpeed;
 		float newPitch = pitchDelta + cumulPitch;
 		float pitchLimit = G_PI_F * 0.5f;
 		if (newPitch > pitchLimit) newPitch = pitchLimit;
@@ -3331,7 +3347,7 @@ private:
 		win.GetClientWidth(windowWidth);
 		float aspectRatio = (windowWidth / (float)windowHeight);
 		controllerProxy.GetState(0, G_RX_AXIS, cInputs.right);
-		float totalYaw = G_DEGREE_TO_RADIAN(FOV) * aspectRatio * LOOK_SENS * dt * x / windowWidth + cInputs.right * thumbSpeed;
+		float totalYaw = G_DEGREE_TO_RADIAN(config.fovDegrees) * aspectRatio * config.lookSens * dt * x / windowWidth + cInputs.right * thumbSpeed;
 		GW::MATH::GMATRIXF yawMatrix;
 		GW::MATH::GVECTORF position = viewMatrix.row4;
 
@@ -3527,8 +3543,8 @@ private:
 		float cascadeSplits[SHADOW_CASCADE_COUNT];
 
 		float splitLambda = 0.7f;
-		float nearClip = NEAR_PLANE;
-		float farClip = __min(FAR_PLANE, SHADOW_DISTANCE);
+		float nearClip = config.nearPlane;
+		float farClip = __min(config.farPlane, config.shadowDistance);
 		float clipRange = farClip - nearClip;
 		float minZ = nearClip;
 		float maxZ = nearClip + clipRange;
@@ -3562,7 +3578,7 @@ private:
 			GW::MATH::GMATRIXF shadowProjection;
 			float aspectRatio = 0.0f;
 			vlk.GetAspectRatio(aspectRatio);
-			float fov = G_DEGREE_TO_RADIAN(FOV);
+			float fov = G_DEGREE_TO_RADIAN(config.fovDegrees);
 			mathProxy.ProjectionVulkanLHF(fov, aspectRatio, farClip, nearClip, shadowProjection);
 			mathProxy.MultiplyMatrixF(sceneData.viewMatrix, shadowProjection, viewPerspective);
 			//mathProxy.MultiplyMatrixF(viewPerspective, flip, viewPerspective);
@@ -3676,7 +3692,7 @@ private:
 			sceneData.cascadeDepthRanges.xyzw[i] = maxZ - minZ;
 			sceneData.cascadeWorldUnitsPerTexel.xyzw[i] = worldUnitsPerTexel;
 			CreateOrthoProjection(minX, maxX, minY, maxY, minZ, maxZ, lightProjectionMatrix);
-			shadowCascades[i].splitDepth = (NEAR_PLANE + splitDistance * clipRange);
+			shadowCascades[i].splitDepth = (config.nearPlane + splitDistance * clipRange);
 			mathProxy.MultiplyMatrixF(lightViewMatrix, lightProjectionMatrix, shadowCascades[i].viewProjectionMatrix);
 			//mathProxy.TransposeF(shadowCascades[i].viewProjectionMatrix, shadowCascades[i].viewProjectionMatrix);
 			sceneData.lightViewProjectionMatrices[i] = shadowCascades[i].viewProjectionMatrix;

@@ -4,7 +4,7 @@
 #include "TinyGLTF/tiny_gltf.h"
 #include "TinyGLTF/stb_image.h"
 
-#include "Gateware.h"
+#include "Core/GatewareConfig.h"
 #include "ktx/include/ktx.h"
 #include "ktx/include/ktxvulkan.h"
 

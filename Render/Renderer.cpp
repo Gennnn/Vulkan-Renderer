@@ -25,14 +25,27 @@ void Renderer::RenderFrame() {
 	vlk.GetSwapchainCurrentFrame(frame);
 
 	UpdateSceneData(frame);
-	RenderShadowPass(frame);
-	SubmitShadowPass(frame);
 
-	VkClearValue clrAndDepth[2];
-	clrAndDepth[0].color = { 0.2f, 0.0f, 0.45f, 1.0f };
-	clrAndDepth[1].depthStencil = { 0.0f, 1u };
+	if (config.enableShadows) {
+		RenderShadowPass(frame);
+		SubmitShadowPass(frame);
+	}
+	
+	VkClearValue clearValues[2]{};
 
-	if (+vlk.StartFrame(2, clrAndDepth)) {
+	clearValues[0].color = { {
+		config.clearColor[0],
+		config.clearColor[1],
+		config.clearColor[2],
+		config.clearColor[3]
+	} };
+
+	clearValues[1].depthStencil = {
+		config.clearDepth,
+		config.clearStencil
+	};
+
+	if (+vlk.StartFrame(2, clearValues)) {
 		Render(frame);
 		vlk.EndFrame(true);
 	}
