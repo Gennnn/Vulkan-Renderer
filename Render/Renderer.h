@@ -23,6 +23,9 @@ using namespace GW::GRAPHICS;
 #if defined WIN32
 #include <Windows.h>
 #endif
+#include <Vulkan/VulkanBuffer.h>
+#include <Vulkan/VulkanResourceUtils.h>
+#include <Vulkan/VulkanRenderTarget.h>
 
 #define SHADOW_CASCADE_COUNT 4
 
@@ -51,8 +54,7 @@ class Renderer
 	// what we need at a minimum to draw a triangle
 	VkDevice device = nullptr;
 	VkPhysicalDevice physicalDevice = nullptr;
-	VkBuffer geometryHandle = nullptr;
-	VkDeviceMemory geometryData = nullptr;
+	VulkanBuffer geometryBuffer;
 	VkShaderModule vertexShader = nullptr;
 	VkShaderModule fragmentShader = nullptr;
 	VkShaderModule shadowVertexShader = nullptr;
@@ -95,8 +97,11 @@ class Renderer
 		float pad;
 	};
 	SHADER_SCENE_DATA sceneData;
-	std::vector<VkBuffer> uniformHandle;
-	std::vector<VkDeviceMemory> uniformData;
+	
+	std::vector<VulkanBuffer> uniformBuffers;
+	std::vector<VulkanBuffer> storageBuffers;
+	std::vector<VulkanBuffer> materialStorageBuffers;
+
 	std::vector<VkDescriptorSet> descriptorSets;
 	VkDescriptorPool descriptorPool = nullptr;
 	VkDescriptorSetLayout descriptorSetLayout = nullptr;
@@ -120,12 +125,17 @@ class Renderer
 		};
 	};
 
-	struct TextureData {
-		VkBuffer buffer;
-		VkDeviceMemory memory;
-		VkImage image;
-		VkImageView imageView;
-		unsigned int sampler;
+	struct TextureData
+	{
+		VkBuffer buffer = VK_NULL_HANDLE;
+		VkDeviceMemory bufferMemory = VK_NULL_HANDLE;
+
+		VulkanImage image;
+
+		unsigned int sampler = 0;
+
+		bool ownsImage = true;
+		bool ownsBuffer = false;
 	};
 
 	std::vector<std::string> texturePaths;
@@ -152,8 +162,7 @@ class Renderer
 		unsigned int pad1;
 	};
 	std::vector<INSTANCE_DATA> objectData;
-	std::vector<VkBuffer> storageHandle;
-	std::vector<VkDeviceMemory> storageData;
+	
 
 	std::chrono::steady_clock::time_point startTime;
 	float4 originalSunDirection;
@@ -184,8 +193,7 @@ class Renderer
 	};
 
 	std::vector<Material> materialData;
-	std::vector<VkBuffer> materialStorageHandle;
-	std::vector<VkDeviceMemory> materialStorageData;
+	
 
 	VkIndexType indexType;
 	unsigned int indexElementSize;
@@ -203,12 +211,20 @@ class Renderer
 
 	struct Cascade {
 
+		VulkanImage depthImage;
 		VkFramebuffer frameBuffer;
-		VkImageView imageView;
-		VkDeviceMemory memory;
-		VkImage image;
-		float splitDepth;
-		GW::MATH::GMATRIXF viewProjectionMatrix;
+
+		float splitDepth = 0.0f;
+		GW::MATH::GMATRIXF viewProjectionMatrix = GW::MATH::GIdentityMatrixF;
+
+		void Destroy(VkDevice device) {
+			if (frameBuffer != VK_NULL_HANDLE) {
+				vkDestroyFramebuffer(device, frameBuffer, nullptr);
+				frameBuffer = VK_NULL_HANDLE;
+			}
+
+			depthImage.Destroy(device);
+		}
 	};
 	std::array<Cascade, SHADOW_CASCADE_COUNT> shadowCascades;
 	
@@ -228,10 +244,10 @@ class Renderer
 		VkFramebuffer framebuffer;
 	};
 
-	BloomImg sceneHDR;
-	BloomImg sceneDepth;
-	BloomImg bloomHoriz;
-	BloomImg bloomVert;
+	VulkanRenderTarget sceneHDR;
+	VulkanRenderTarget sceneDepth;
+	VulkanRenderTarget bloomHoriz;
+	VulkanRenderTarget bloomVert;
 
 	unsigned int bloomSamplerIndex;
 
@@ -360,7 +376,7 @@ private:
 				texData.push_back(TextureData{});
 				ind = texData.size() - 1;
 
-				UploadTextureToGPU(vlk, texturePaths[i], texData[ind].memory, texData[ind].image, texData[ind].imageView);
+				UploadTextureToGPU(vlk, texturePaths[i], texData[ind].image.memory, texData[ind].image.image, texData[ind].image.imageView);
 
 				if (i == brdfIndex) {
 					sceneData.brdfIndex = ind;
@@ -370,7 +386,7 @@ private:
 				cubeTexData.push_back(TextureData{});
 				ind = cubeTexData.size() - 1;
 
-				UploadKTXTextureToGPU(vlk, texturePaths[i], cubeTexData[ind].buffer, cubeTexData[ind].memory, cubeTexData[ind].image, cubeTexData[ind].imageView);
+				UploadKTXTextureToGPU(vlk, texturePaths[i], cubeTexData[ind].buffer, cubeTexData[ind].image.memory, cubeTexData[ind].image.image, cubeTexData[ind].image.imageView);
 
 				if (i == specularIndex) {
 					sceneData.specularIndex = ind;
@@ -458,7 +474,7 @@ private:
 		cubeTexData = {};
 		for (int i = 0; i < texData.size(); i++) {
 			tinygltf::Image img = model.images[model.textures[i].source];
-			UploadTextureToGPU(vlk, FindTextureLocation(img), texData[i].memory, texData[i].image, texData[i].imageView);
+			UploadTextureToGPU(vlk, FindTextureLocation(img), texData[i].image.memory, texData[i].image.image, texData[i].image.imageView);
 			texData[i].sampler = model.textures[i].sampler;
 			
 		}
@@ -668,8 +684,7 @@ private:
 		unsigned int maxFrames = 0;
 		if (+vlk.GetSwapchainImageCount(maxFrames)) {
 
-			uniformData.resize(maxFrames);
-			uniformHandle.resize(maxFrames);
+			uniformBuffers.resize(maxFrames);
 			descriptorSets.resize(maxFrames);
 
 			for (int i = 0; i < maxFrames; i++) {
@@ -682,8 +697,7 @@ private:
 	{
 		unsigned int maxFrames = 0;
 		if (+vlk.GetSwapchainImageCount(maxFrames)) {
-			storageData.resize(maxFrames);
-			storageHandle.resize(maxFrames);
+			storageBuffers.resize(maxFrames);
 			for (int i = 0; i < maxFrames; i++) {
 				CreateStorageBuffer(objectData.data(), sizeof(INSTANCE_DATA) * objectData.size(), i);
 			}
@@ -694,8 +708,7 @@ private:
 	{
 		unsigned int maxFrames = 0;
 		if (+vlk.GetSwapchainImageCount(maxFrames)) {
-			materialStorageData.resize(maxFrames);
-			materialStorageHandle.resize(maxFrames);
+			materialStorageBuffers.resize(maxFrames);
 			for (int i = 0; i < maxFrames; i++) {
 				CreateMaterialStorageBuffer(materialData.data(), sizeof(Material) * materialData.size(), i);
 			}
@@ -704,36 +717,22 @@ private:
 
 	void CreateGeometryBuffer(const void* data, unsigned int sizeInBytes)
 	{
-		VkDeviceSize offset = 0;
-		
-		GvkHelper::create_buffer(physicalDevice, device, sizeInBytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&geometryHandle, &geometryData);
-		GvkHelper::write_to_buffer(device, geometryData, data, sizeInBytes); // Transfer triangle data to the vertex buffer. (staging would be prefered here)
+		geometryBuffer = CreateVulkanBuffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, data);
 	}
 
 	void CreateUniformBuffer(const void* data, unsigned int sizeInBytes, int index)
 	{
-		GvkHelper::create_buffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&uniformHandle[index], &uniformData[index]);
-		GvkHelper::write_to_buffer(device, uniformData[index], data, sizeInBytes); // Transfer triangle data to the vertex buffer. (staging would be prefered here)
+		uniformBuffers[index] = CreateVulkanBuffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, data);
 	}
 
 	void CreateStorageBuffer(const void* data, unsigned int sizeInBytes, int index)
 	{
-		GvkHelper::create_buffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&storageHandle[index], &storageData[index]);
-		GvkHelper::write_to_buffer(device, storageData[index], data, sizeInBytes); // Transfer triangle data to the vertex buffer. (staging would be prefered here)
+		storageBuffers[index] = CreateVulkanBuffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, data);
 	}
 
 	void CreateMaterialStorageBuffer(const void* data, unsigned int sizeInBytes, int index)
 	{
-		GvkHelper::create_buffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&materialStorageHandle[index], &materialStorageData[index]);
-		GvkHelper::write_to_buffer(device, materialStorageData[index], data, sizeInBytes); // Transfer triangle data to the vertex buffer. (staging would be prefered here)
+		materialStorageBuffers[index] = CreateVulkanBuffer(physicalDevice, device, sizeInBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, data);
 	}
 
 	void InitializeShadowCommandBuffers() {
@@ -811,17 +810,17 @@ private:
 			sceneHDRCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 			sceneHDRCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-			vkCreateImage(device, &sceneHDRCreateInfo, nullptr, &sceneHDR.image);
+			vkCreateImage(device, &sceneHDRCreateInfo, nullptr, &sceneHDR.image.image);
 
 			VkMemoryRequirements mem;
-			vkGetImageMemoryRequirements(device, sceneHDR.image, &mem);
+			vkGetImageMemoryRequirements(device, sceneHDR.image.image, &mem);
 
 			VkMemoryAllocateInfo allocateInfo = {};
 			allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 			allocateInfo.allocationSize = mem.size;
 			allocateInfo.memoryTypeIndex = FindMemoryType(mem.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			vkAllocateMemory(device, &allocateInfo, nullptr, &sceneHDR.memory);
-			vkBindImageMemory(device, sceneHDR.image, sceneHDR.memory, 0);
+			vkAllocateMemory(device, &allocateInfo, nullptr, &sceneHDR.image.memory);
+			vkBindImageMemory(device, sceneHDR.image.image, sceneHDR.image.memory, 0);
 
 			VkImageViewCreateInfo viewCreateInfo = {};
 			viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -833,8 +832,8 @@ private:
 			viewCreateInfo.subresourceRange.levelCount = 1;
 			viewCreateInfo.subresourceRange.baseArrayLayer = 0;
 			viewCreateInfo.subresourceRange.layerCount = 1;
-			viewCreateInfo.image = sceneHDR.image;
-			vkCreateImageView(device, &viewCreateInfo, nullptr, &sceneHDR.imageView);
+			viewCreateInfo.image = sceneHDR.image.image;
+			vkCreateImageView(device, &viewCreateInfo, nullptr, &sceneHDR.image.imageView);
 		}
 		{
 			VkImageCreateInfo sceneDepthCreateInfo = {};
@@ -852,17 +851,17 @@ private:
 			sceneDepthCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 			sceneDepthCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-			vkCreateImage(device, &sceneDepthCreateInfo, nullptr, &sceneDepth.image);
+			vkCreateImage(device, &sceneDepthCreateInfo, nullptr, &sceneDepth.image.image);
 
 			VkMemoryRequirements mem;
-			vkGetImageMemoryRequirements(device, sceneDepth.image, &mem);
+			vkGetImageMemoryRequirements(device, sceneDepth.image.image, &mem);
 
 			VkMemoryAllocateInfo allocateInfo = {};
 			allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 			allocateInfo.allocationSize = mem.size;
 			allocateInfo.memoryTypeIndex = FindMemoryType(mem.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			vkAllocateMemory(device, &allocateInfo, nullptr, &sceneDepth.memory);
-			vkBindImageMemory(device, sceneDepth.image, sceneDepth.memory, 0);
+			vkAllocateMemory(device, &allocateInfo, nullptr, &sceneDepth.image.memory);
+			vkBindImageMemory(device, sceneDepth.image.image, sceneDepth.image.memory, 0);
 
 			VkImageViewCreateInfo viewCreateInfo = {};
 			viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -874,8 +873,8 @@ private:
 			viewCreateInfo.subresourceRange.levelCount = 1;
 			viewCreateInfo.subresourceRange.baseArrayLayer = 0;
 			viewCreateInfo.subresourceRange.layerCount = 1;
-			viewCreateInfo.image = sceneDepth.image;
-			vkCreateImageView(device, &viewCreateInfo, nullptr, &sceneDepth.imageView);
+			viewCreateInfo.image = sceneDepth.image.image;
+			vkCreateImageView(device, &viewCreateInfo, nullptr, &sceneDepth.image.imageView);
 		}
 		
 		{
@@ -894,17 +893,17 @@ private:
 			bloomHorizCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 			bloomHorizCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-			vkCreateImage(device, &bloomHorizCreateInfo, nullptr, &bloomHoriz.image);
+			vkCreateImage(device, &bloomHorizCreateInfo, nullptr, &bloomHoriz.image.image);
 
 			VkMemoryRequirements mem;
-			vkGetImageMemoryRequirements(device, bloomHoriz.image, &mem);
+			vkGetImageMemoryRequirements(device, bloomHoriz.image.image, &mem);
 
 			VkMemoryAllocateInfo allocateInfo = {};
 			allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 			allocateInfo.allocationSize = mem.size;
 			allocateInfo.memoryTypeIndex = FindMemoryType(mem.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			vkAllocateMemory(device, &allocateInfo, nullptr, &bloomHoriz.memory);
-			vkBindImageMemory(device, bloomHoriz.image, bloomHoriz.memory, 0);
+			vkAllocateMemory(device, &allocateInfo, nullptr, &bloomHoriz.image.memory);
+			vkBindImageMemory(device, bloomHoriz.image.image, bloomHoriz.image.memory, 0);
 
 			VkImageViewCreateInfo viewCreateInfo = {};
 			viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -916,8 +915,8 @@ private:
 			viewCreateInfo.subresourceRange.levelCount = 1;
 			viewCreateInfo.subresourceRange.baseArrayLayer = 0;
 			viewCreateInfo.subresourceRange.layerCount = 1;
-			viewCreateInfo.image = bloomHoriz.image;
-			vkCreateImageView(device, &viewCreateInfo, nullptr, &bloomHoriz.imageView);
+			viewCreateInfo.image = bloomHoriz.image.image;
+			vkCreateImageView(device, &viewCreateInfo, nullptr, &bloomHoriz.image.imageView);
 		}
 		
 		{
@@ -936,17 +935,17 @@ private:
 			bloomVertCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 			bloomVertCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-			vkCreateImage(device, &bloomVertCreateInfo, nullptr, &bloomVert.image);
+			vkCreateImage(device, &bloomVertCreateInfo, nullptr, &bloomVert.image.image);
 
 			VkMemoryRequirements mem;
-			vkGetImageMemoryRequirements(device, bloomVert.image, &mem);
+			vkGetImageMemoryRequirements(device, bloomVert.image.image, &mem);
 
 			VkMemoryAllocateInfo allocateInfo = {};
 			allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 			allocateInfo.allocationSize = mem.size;
 			allocateInfo.memoryTypeIndex = FindMemoryType(mem.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			vkAllocateMemory(device, &allocateInfo, nullptr, &bloomVert.memory);
-			vkBindImageMemory(device, bloomVert.image, bloomVert.memory, 0);
+			vkAllocateMemory(device, &allocateInfo, nullptr, &bloomVert.image.memory);
+			vkBindImageMemory(device, bloomVert.image.image, bloomVert.image.memory, 0);
 
 			VkImageViewCreateInfo viewCreateInfo = {};
 			viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -958,8 +957,8 @@ private:
 			viewCreateInfo.subresourceRange.levelCount = 1;
 			viewCreateInfo.subresourceRange.baseArrayLayer = 0;
 			viewCreateInfo.subresourceRange.layerCount = 1;
-			viewCreateInfo.image = bloomVert.image;
-			vkCreateImageView(device, &viewCreateInfo, nullptr, &bloomVert.imageView);
+			viewCreateInfo.image = bloomVert.image.image;
+			vkCreateImageView(device, &viewCreateInfo, nullptr, &bloomVert.image.imageView);
 		}
 		
 	}
@@ -1081,7 +1080,7 @@ private:
 		unsigned int height = windowHeight;
 
 		{
-			VkImageView attachments[2] = { sceneHDR.imageView, sceneDepth.imageView };
+			VkImageView attachments[2] = { sceneHDR.image.imageView, sceneDepth.image.imageView };
 
 			VkFramebufferCreateInfo framebufferCreateInfo{};
 			framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1096,7 +1095,7 @@ private:
 		}
 
 		{
-			VkImageView attachment = bloomVert.imageView;
+			VkImageView attachment = bloomVert.image.imageView;
 			VkFramebufferCreateInfo framebufferCreateInfo{};
 			framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 			framebufferCreateInfo.renderPass = bloomRenderPass;
@@ -1110,7 +1109,7 @@ private:
 		}
 
 		{
-			VkImageView attachment = bloomHoriz.imageView;
+			VkImageView attachment = bloomHoriz.image.imageView;
 			VkFramebufferCreateInfo framebufferCreateInfo{};
 			framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 			framebufferCreateInfo.renderPass = bloomRenderPass;
@@ -1149,10 +1148,11 @@ private:
 		sceneData.shadowIndex = texData.size();
 		for (int i = 0; i < SHADOW_CASCADE_COUNT; i++) {
 			TextureData shadowTexture = {};
-			shadowTexture.image = shadowCascades[i].image;
-			shadowTexture.imageView = shadowCascades[i].imageView;
-			shadowTexture.memory = shadowCascades[i].memory;
+			shadowTexture.image.image = shadowCascades[i].depthImage.image;
+			shadowTexture.image.imageView = shadowCascades[i].depthImage.imageView;
+			shadowTexture.image.memory = VK_NULL_HANDLE;
 			shadowTexture.sampler = samplers.size();
+			shadowTexture.ownsImage = false;
 			texData.push_back(shadowTexture);
 		}
 		VkSampler sampler = {};
@@ -1176,17 +1176,17 @@ private:
 		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 		
 		for (int i = 0; i < SHADOW_CASCADE_COUNT; i++) {
-			vkCreateImage(device, &imageCreateInfo, nullptr, &shadowCascades[i].image);
+			vkCreateImage(device, &imageCreateInfo, nullptr, &shadowCascades[i].depthImage.image);
 
 			VkMemoryRequirements mem;
-			vkGetImageMemoryRequirements(device, shadowCascades[i].image, &mem);
+			vkGetImageMemoryRequirements(device, shadowCascades[i].depthImage.image, &mem);
 
 			VkMemoryAllocateInfo allocateInfo = {};
 			allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 			allocateInfo.allocationSize = mem.size;
 			allocateInfo.memoryTypeIndex = FindMemoryType(mem.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			vkAllocateMemory(device, &allocateInfo, nullptr, &shadowCascades[i].memory);
-			vkBindImageMemory(device, shadowCascades[i].image, shadowCascades[i].memory, 0);
+			vkAllocateMemory(device, &allocateInfo, nullptr, &shadowCascades[i].depthImage.memory);
+			vkBindImageMemory(device, shadowCascades[i].depthImage.image, shadowCascades[i].depthImage.memory, 0);
 
 			VkImageViewCreateInfo viewCreateInfo = {};
 			viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1198,8 +1198,8 @@ private:
 			viewCreateInfo.subresourceRange.levelCount = 1;
 			viewCreateInfo.subresourceRange.baseArrayLayer = 0;
 			viewCreateInfo.subresourceRange.layerCount = 1;
-			viewCreateInfo.image = shadowCascades[i].image;
-			vkCreateImageView(device, &viewCreateInfo, nullptr, &shadowCascades[i].imageView);
+			viewCreateInfo.image = shadowCascades[i].depthImage.image;
+			vkCreateImageView(device, &viewCreateInfo, nullptr, &shadowCascades[i].depthImage.imageView);
 
 		}
 	}
@@ -1304,7 +1304,7 @@ private:
 			barrier.srcAccessMask = 0;
 			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-			barrier.image = shadowCascades[i].image;
+			barrier.image = shadowCascades[i].depthImage.image;
 			barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 			barrier.subresourceRange.baseMipLevel = 0;
 			barrier.subresourceRange.levelCount = 1;
@@ -1362,19 +1362,19 @@ private:
 		vkBeginCommandBuffer(cmd, &begin);
 
 		{
-			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(sceneHDR.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
+			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(sceneHDR.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 		}
 		{
-			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(bloomVert.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
+			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(bloomVert.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 		}
 		{
-			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(bloomHoriz.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
+			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(bloomHoriz.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT);
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 		}
 		{
-			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(sceneDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+			VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(sceneDepth.image.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 		}
 
@@ -1416,7 +1416,7 @@ private:
 			frameBufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 			frameBufferCreateInfo.renderPass = shadowRenderPass;
 			frameBufferCreateInfo.attachmentCount = 1;
-			frameBufferCreateInfo.pAttachments = &shadowCascades[i].imageView;
+			frameBufferCreateInfo.pAttachments = &shadowCascades[i].depthImage.imageView;
 			frameBufferCreateInfo.width = shadowMapSize;
 			frameBufferCreateInfo.height = shadowMapSize;
 			frameBufferCreateInfo.layers = 1;
@@ -1510,17 +1510,17 @@ private:
 
 		VkDescriptorImageInfo sceneViewInfo{};
 		sceneViewInfo.sampler = postSampler;
-		sceneViewInfo.imageView = sceneHDR.imageView;
+		sceneViewInfo.imageView = sceneHDR.image.imageView;
 		sceneViewInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 		VkDescriptorImageInfo vertInfo{};
 		vertInfo.sampler = postSampler;
-		vertInfo.imageView = bloomVert.imageView;
+		vertInfo.imageView = bloomVert.image.imageView;
 		vertInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 		VkDescriptorImageInfo horizInfo{};
 		horizInfo.sampler = postSampler;
-		horizInfo.imageView = bloomHoriz.imageView;
+		horizInfo.imageView = bloomHoriz.image.imageView;
 		horizInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 		for (unsigned int i = 0; i < maxFrames; i++) {
@@ -1605,15 +1605,15 @@ private:
 	void UpdateDescriptorSets() {
 		for (int i = 0; i < descriptorSets.size(); i++) {
 			VkDescriptorBufferInfo bufferInfo[3] = {};
-			bufferInfo[0].buffer = uniformHandle[i];
+			bufferInfo[0].buffer = uniformBuffers[i].handle;
 			bufferInfo[0].offset = 0;
 			bufferInfo[0].range = sizeof(SHADER_SCENE_DATA);
 
-			bufferInfo[1].buffer = storageHandle[i];
+			bufferInfo[1].buffer = storageBuffers[i].handle;
 			bufferInfo[1].offset = 0;
 			bufferInfo[1].range = sizeof(INSTANCE_DATA) * objectData.size();
 
-			bufferInfo[2].buffer = materialStorageHandle[i];
+			bufferInfo[2].buffer = materialStorageBuffers[i].handle;
 			bufferInfo[2].offset = 0;
 			bufferInfo[2].range = sizeof(Material) * materialData.size();
 
@@ -1649,7 +1649,7 @@ private:
 		for (int i = 0; i < texData.size(); i++) {
 			bool isShadow = (i >= (int)sceneData.shadowIndex) && (i < (int)sceneData.shadowIndex + SHADOW_CASCADE_COUNT);
 			imageInfo[i].imageLayout = isShadow ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			imageInfo[i].imageView = texData[i].imageView;
+			imageInfo[i].imageView = texData[i].image.imageView;
 			imageInfo[i].sampler = samplers[texData[i].sampler];
 		}
 		VkWriteDescriptorSet write = {};
@@ -1667,7 +1667,7 @@ private:
 		for (int i = 0; i < cubeTexData.size(); i++) {
 			//bool isShadow = (i >= (int)sceneData.shadowIndex) && (i < (int)sceneData.shadowIndex + SHADOW_CASCADE_COUNT);
 			cubeInfo[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			cubeInfo[i].imageView = cubeTexData[i].imageView;
+			cubeInfo[i].imageView = cubeTexData[i].image.imageView;
 			cubeInfo[i].sampler = samplers[cubeTexData[i].sampler];
 		}
 		VkWriteDescriptorSet cubeWrite = {};
@@ -3150,7 +3150,7 @@ private:
 
 			
 
-			VkBuffer buffers[] = { geometryHandle, geometryHandle, geometryHandle , geometryHandle };
+			VkBuffer buffers[] = { geometryBuffer.handle, geometryBuffer.handle, geometryBuffer.handle , geometryBuffer.handle };
 			BindGeometryBuffers(commandBuffer);
 			for (int i = 0; i < (int)primitivesToDraw.size(); i++) {
 				VkDeviceSize offsets[] = { bufferByteOffsets[primitivesToDraw[i].instanceIndex][0], bufferByteOffsets[primitivesToDraw[i].instanceIndex][1], bufferByteOffsets[primitivesToDraw[i].instanceIndex][2] ,bufferByteOffsets[primitivesToDraw[i].instanceIndex][3] };
@@ -3201,7 +3201,7 @@ private:
 			vkCmdEndRenderPass(commandBuffer);
 		}
 
-		VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(bloomVert.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+		VkImageMemoryBarrier barrier = CreateImageMemoryBarrier(bloomVert.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
 		vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
 		{
@@ -3508,7 +3508,7 @@ private:
 			VkDescriptorSet sets[] = { descriptorSets[frame], textureDescriptorSet, cubeTextureDescriptorSet };
 			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 3, sets, 0, nullptr);
 			pc.cascadeIndex = j;
-			VkBuffer buffers[] = { geometryHandle, geometryHandle,geometryHandle,geometryHandle };
+			VkBuffer buffers[] = { geometryBuffer.handle, geometryBuffer.handle,geometryBuffer.handle,geometryBuffer.handle };
 
 			vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
 
@@ -3530,12 +3530,12 @@ private:
 			mathProxy.MultiplyMatrixF(sceneData.projectionMatrix, sceneData.viewMatrix, sceneData.lightViewProjectionMatrices[i]);
 		}*/
 
-		GvkHelper::write_to_buffer(device, uniformData[currentFrame], &sceneData, sizeof(sceneData));
+		GvkHelper::write_to_buffer(device, uniformBuffers[currentFrame].memory, &sceneData, sizeof(sceneData));
 
 
-		GvkHelper::write_to_buffer(device, storageData[currentFrame], objectData.data(), sizeof(INSTANCE_DATA) * objectData.size());
+		GvkHelper::write_to_buffer(device, storageBuffers[currentFrame].memory, objectData.data(), sizeof(INSTANCE_DATA) * objectData.size());
 
-		GvkHelper::write_to_buffer(device, materialStorageData[currentFrame], materialData.data(), sizeof(Material) * materialData.size());
+		GvkHelper::write_to_buffer(device, materialStorageBuffers[currentFrame].memory, materialData.data(), sizeof(Material) * materialData.size());
 
 	}
 
@@ -3794,8 +3794,8 @@ private:
 	void BindGeometryBuffers(VkCommandBuffer& commandBuffer)
 	{
 		VkDeviceSize offsets[] = { bufferByteOffsets[0][0], bufferByteOffsets[0][1], bufferByteOffsets[0][2], bufferByteOffsets[0][3]};
-		VkBuffer buffers[] = { geometryHandle, geometryHandle,geometryHandle,geometryHandle };
-		vkCmdBindIndexBuffer(commandBuffer, geometryHandle, 0, indexType );
+		VkBuffer buffers[] = { geometryBuffer.handle, geometryBuffer.handle,geometryBuffer.handle,geometryBuffer.handle };
+		vkCmdBindIndexBuffer(commandBuffer, geometryBuffer.handle, 0, indexType );
 		vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
 		
 	}
@@ -3813,10 +3813,21 @@ private:
 	}
 
 	void FreeTextureData(std::vector<TextureData>& data) {
-		for (int i = 0; i < data.size(); i++) {
-			vkFreeMemory(device, data[i].memory, nullptr);
-			vkDestroyImage(device, data[i].image, nullptr);
-			vkDestroyImageView(device, data[i].imageView, nullptr);
+		for (auto& texture : data) {
+			if (texture.ownsBuffer) {
+				if (texture.buffer != VK_NULL_HANDLE) {
+					vkDestroyBuffer(device, texture.buffer, nullptr);
+					texture.buffer = VK_NULL_HANDLE;
+				}
+				if (texture.bufferMemory != VK_NULL_HANDLE) {
+					vkFreeMemory(device, texture.bufferMemory, nullptr);
+					texture.bufferMemory = VK_NULL_HANDLE;
+				}
+			}
+			if (texture.ownsImage)
+			{
+				texture.image.Destroy(device);
+			}
 		}
 	}
 
@@ -3824,12 +3835,6 @@ private:
 		for (int i = 0; i < data.size(); i++) {
 			vkDestroySampler(device, data[i], nullptr);
 		}
-	}
-
-	void DestroyBloomImg(BloomImg bloomImg) {
-		vkFreeMemory(device, bloomImg.memory, nullptr);
-		vkDestroyImage(device, bloomImg.image, nullptr);
-		vkDestroyImageView(device, bloomImg.imageView, nullptr);
 	}
 
 	//Cleanup callback function (passed to VKSurface, will be called when the pipeline shuts down)
@@ -3847,13 +3852,9 @@ private:
 		vkDestroyPipelineLayout(device, bloomCompositePipelineLayout, nullptr);
 		vkDestroyPipelineLayout(device, bloomBlurPipelineLayout, nullptr);
 
-		for (int i = 0; i < SHADOW_CASCADE_COUNT; i++) {
-			vkDestroyFramebuffer(device, shadowCascades[i].frameBuffer, nullptr);
+		for (auto& cascade : shadowCascades) {
+			cascade.Destroy(device);
 		}
-
-		vkDestroyFramebuffer(device, sceneHDR.framebuffer, nullptr);
-		vkDestroyFramebuffer(device, bloomHoriz.framebuffer, nullptr);
-		vkDestroyFramebuffer(device, bloomVert.framebuffer, nullptr);
 
 		for (int i = 0; i < bloomFences.size(); i++) {
 			vkDestroyFence(device, bloomFences[i], nullptr);
@@ -3864,14 +3865,16 @@ private:
 		vkDestroyRenderPass(device, bloomRenderPass, nullptr);
 
 		// Release allocated buffers, shaders & pipeline
-		vkDestroyBuffer(device, geometryHandle, nullptr);
-		vkFreeMemory(device, geometryData, nullptr);
-		DestroyBuffer(uniformHandle);
-		FreeMemory(uniformData);
-		DestroyBuffer(storageHandle);
-		FreeMemory(storageData);
-		DestroyBuffer(materialStorageHandle);
-		FreeMemory(materialStorageData);
+		geometryBuffer.Destroy(device);
+		for (auto& buffer : uniformBuffers) {
+			buffer.Destroy(device);
+		}
+		for (auto& buffer : storageBuffers) {
+			buffer.Destroy(device);
+		}
+		for (auto& buffer : materialStorageBuffers) {
+			buffer.Destroy(device);
+		}
 		
 		
 		vkDestroyCommandPool(device, shadowCommandPool, nullptr);
@@ -3905,10 +3908,10 @@ private:
 		FreeTextureData(cubeTexData);
 		DestroySamplers(samplers);
 
-		DestroyBloomImg(sceneHDR);
-		DestroyBloomImg(sceneDepth);
-		DestroyBloomImg(bloomHoriz);
-		DestroyBloomImg(bloomVert);
+		sceneHDR.Destroy(device);
+		sceneDepth.Destroy(device);
+		bloomHoriz.Destroy(device);
+		bloomVert.Destroy(device);
 
 		alive = false;
 	}
