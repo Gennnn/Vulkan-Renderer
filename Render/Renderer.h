@@ -7,7 +7,6 @@
 #include "../FileIntoString.h"
 #include "../TextureUtils.h"
 #include "../Materials/TextureUtilsKTX.h"
-#include "../TinyGLTF/tiny_gltf.h"
 
 #include <dxcapi.h>
 #include <wrl/client.h>
@@ -26,6 +25,8 @@ using namespace GW::GRAPHICS;
 #include <Vulkan/VulkanBuffer.h>
 #include <Vulkan/VulkanResourceUtils.h>
 #include <Vulkan/VulkanRenderTarget.h>
+#include <ImportedScene.h>
+#include <GltfImporter.h>
 
 #define SHADOW_CASCADE_COUNT 4
 
@@ -66,11 +67,8 @@ class Renderer
 
 	unsigned int windowWidth, windowHeight;
 
-	tinygltf::Model model;
-	tinygltf::TinyGLTF loader;
-	std::string fileName;
-	std::string err;
-	std::string warn;
+	
+	
 	unsigned int indexCount;
 	VkDeviceSize indexOffset;
 	VkDeviceSize vertexOffset;
@@ -136,6 +134,14 @@ class Renderer
 
 		bool ownsImage = true;
 		bool ownsBuffer = false;
+
+		TextureData() = default;
+
+		TextureData(const TextureData&) = delete;
+		TextureData& operator=(const TextureData&) = delete;
+
+		TextureData(TextureData&&) noexcept = default;
+		TextureData& operator=(TextureData&&) noexcept = default;
 	};
 
 	std::vector<std::string> texturePaths;
@@ -178,6 +184,10 @@ class Renderer
 		unsigned int matIndex;
 	};
 	std::vector<Primitive> primitivesToDraw;
+
+	std::vector<unsigned char> importedGeometryBytes;
+
+
 	std::vector<double> scale;
 	
 	struct Material {
@@ -299,30 +309,17 @@ public:
 
 		startTime = std::chrono::steady_clock::now();
 
-		fileName = config.startupScenePath;
-
-		bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, fileName);
-
-		if (!warn.empty()) {
-			std::cout << "glTF warning: " << warn << std::endl;
-		}
-		if (!err.empty()) {
-			std::cout << "glTF error: " << err << std::endl;
-		}
-		if (!ret) {
-			std::cout << "Failed to load glTF scene: " << fileName << std::endl;
-			alive = false;
-			return;
-		}
-
 		texturePaths = { config.brdfLutPath, config.diffuseIrradiancePath, config.specularPrefilterPath, config.skyboxPath };
 
 		shadowMapSize = config.shadowMapSize;
 
-		GetPrimitiveData();
-		GetTextureData();
+		GltfImporter importer;
+		ImportedScene imported = importer.Load(config.startupScenePath);
+
+		ApplyImportedScene(imported);
+		UploadImportedTextures(imported);
+
 		UpdateWindowDimensions();
-		GetMaterialData();
 		if (+mathProxy.Create()) {
 			GW::MATH::GMATRIXF matrix = GW::MATH::GIdentityMatrixF;
 			sceneData = {};
@@ -353,7 +350,7 @@ public:
 		if (+inputProxy.Create(win)) {
 
 		}
-		scale = model.nodes[0].scale;
+		scale = imported.rootScale;
 		
 		LoadEnvironmentTextures();
 
@@ -366,27 +363,33 @@ public:
 
 
 private:
+
+	void ApplyImportedScene(const ImportedScene& imported);
+	void UploadImportedTextures(const ImportedScene& imported);
+
 	void LoadEnvironmentTextures() {
 		for (int i = 0; i < texturePaths.size(); i++) {
 			std::string texPath = texturePaths[i];
 			std::string extension = texPath.substr(texPath.find_last_of('.'));
 
-			unsigned int ind;
 			if (extension == ".png") {
-				texData.push_back(TextureData{});
-				ind = texData.size() - 1;
+				TextureData& texture = texData.emplace_back();
 
-				UploadTextureToGPU(vlk, texturePaths[i], texData[ind].image.memory, texData[ind].image.image, texData[ind].image.imageView);
+				UploadTextureToGPU(vlk, texturePaths[i], texture.image.memory, texture.image.image, texture.image.imageView);
+
+				unsigned int ind = static_cast<unsigned int>(texData.size() - 1);
 
 				if (i == brdfIndex) {
 					sceneData.brdfIndex = ind;
 				}
 			}
 			else if (extension == ".ktx2") {
-				cubeTexData.push_back(TextureData{});
-				ind = cubeTexData.size() - 1;
+				TextureData& texture = cubeTexData.emplace_back();
 
-				UploadKTXTextureToGPU(vlk, texturePaths[i], cubeTexData[ind].buffer, cubeTexData[ind].image.memory, cubeTexData[ind].image.image, cubeTexData[ind].image.imageView);
+				UploadKTXTextureToGPU(vlk, texturePaths[i], texture.buffer, texture.image.memory, texture.image.image, texture.image.imageView);
+
+				texture.ownsBuffer = true;
+				unsigned int ind = static_cast<unsigned int>(cubeTexData.size() - 1);
 
 				if (i == specularIndex) {
 					sceneData.specularIndex = ind;
@@ -467,11 +470,11 @@ private:
 		mathProxy.ProjectionVulkanLHF(G_DEGREE_TO_RADIAN(60), 1, config.nearPlane, config.farPlane, sceneData.lightProjectionMatrix);
 	}*/
 
-	void GetTextureData() {
+	/*void GetTextureData() {
 		texData.clear();
 		cubeTexData.clear();
 		texData.resize(model.textures.size());
-		cubeTexData = {};
+		
 		for (int i = 0; i < texData.size(); i++) {
 			tinygltf::Image img = model.images[model.textures[i].source];
 			UploadTextureToGPU(vlk, FindTextureLocation(img), texData[i].image.memory, texData[i].image.image, texData[i].image.imageView);
@@ -523,70 +526,70 @@ private:
 		}
 		parentFolder += img.uri;
 		return parentFolder;
-	}
+	}*/
 
-	void GetPrimitiveData() {
+	//void GetPrimitiveData() {
 
-		primitivesToDraw.clear();
-		
+	//	primitivesToDraw.clear();
+	//	
 
-		tinygltf::Primitive primitive = model.meshes[0].primitives[0];
+	//	tinygltf::Primitive primitive = model.meshes[0].primitives[0];
 
-		tinygltf::Accessor accessor = model.accessors[primitive.indices];
-		
-		indexCount = accessor.count;
+	//	tinygltf::Accessor accessor = model.accessors[primitive.indices];
+	//	
+	//	indexCount = accessor.count;
 
-		tinygltf::BufferView bufferView = model.bufferViews[accessor.bufferView];
-		indexOffset = bufferView.byteOffset + accessor.byteOffset;
-		//indexByteOffset = bufferView.byteOffset;
+	//	tinygltf::BufferView bufferView = model.bufferViews[accessor.bufferView];
+	//	indexOffset = bufferView.byteOffset + accessor.byteOffset;
+	//	//indexByteOffset = bufferView.byteOffset;
 
-		accessor = model.accessors[primitive.attributes.at("POSITION")];
-		bufferView = model.bufferViews[accessor.bufferView];
-		vertexOffset = bufferView.byteOffset + accessor.byteOffset;
-		
+	//	accessor = model.accessors[primitive.attributes.at("POSITION")];
+	//	bufferView = model.bufferViews[accessor.bufferView];
+	//	vertexOffset = bufferView.byteOffset + accessor.byteOffset;
+	//	
 
-		posBindingDescriptionStride = accessor.ByteStride(bufferView);
-		attributeDescriptionOffset[0] = 0;
+	//	posBindingDescriptionStride = accessor.ByteStride(bufferView);
+	//	attributeDescriptionOffset[0] = 0;
 
-		accessor = model.accessors[primitive.attributes.at("NORMAL")];
-		bufferView = model.bufferViews[accessor.bufferView];
-		nrmBindingDescriptionStride = accessor.ByteStride(bufferView);
-		attributeDescriptionOffset[1] = 0;
+	//	accessor = model.accessors[primitive.attributes.at("NORMAL")];
+	//	bufferView = model.bufferViews[accessor.bufferView];
+	//	nrmBindingDescriptionStride = accessor.ByteStride(bufferView);
+	//	attributeDescriptionOffset[1] = 0;
 
-		accessor = model.accessors[primitive.attributes.at("TEXCOORD_0")];
-		bufferView = model.bufferViews[accessor.bufferView];
-		uvBindingDescriptionStride = accessor.ByteStride(bufferView);
-		attributeDescriptionOffset[2] = 0;
+	//	accessor = model.accessors[primitive.attributes.at("TEXCOORD_0")];
+	//	bufferView = model.bufferViews[accessor.bufferView];
+	//	uvBindingDescriptionStride = accessor.ByteStride(bufferView);
+	//	attributeDescriptionOffset[2] = 0;
 
-		accessor = model.accessors[primitive.attributes.at("TANGENT")];
-		bufferView = model.bufferViews[accessor.bufferView];
-		tangentBindingDescriptionStride = accessor.ByteStride(bufferView);
-		attributeDescriptionOffset[3] = 0;
+	//	accessor = model.accessors[primitive.attributes.at("TANGENT")];
+	//	bufferView = model.bufferViews[accessor.bufferView];
+	//	tangentBindingDescriptionStride = accessor.ByteStride(bufferView);
+	//	attributeDescriptionOffset[3] = 0;
 
-		for (int m = 0; m < model.meshes.size(); m++) {
-			tinygltf::Mesh mesh = model.meshes[m];
-			for (int p = 0; p < mesh.primitives.size(); p++) {
-				tinygltf::Primitive primitive = mesh.primitives[p];
-				AddBufferByteOffset(primitive, primitivesToDraw.size());
-				accessor = model.accessors[primitive.indices];
-				FindIndexElementSize(accessor);
-				bufferView = model.bufferViews[accessor.bufferView];
+	//	for (int m = 0; m < model.meshes.size(); m++) {
+	//		tinygltf::Mesh mesh = model.meshes[m];
+	//		for (int p = 0; p < mesh.primitives.size(); p++) {
+	//			tinygltf::Primitive primitive = mesh.primitives[p];
+	//			AddBufferByteOffset(primitive, primitivesToDraw.size());
+	//			accessor = model.accessors[primitive.indices];
+	//			FindIndexElementSize(accessor);
+	//			bufferView = model.bufferViews[accessor.bufferView];
 
-				Primitive primitiveObj = {};
-				primitiveObj.indexCount = accessor.count;
-				unsigned int byteOffset = (accessor.byteOffset + bufferView.byteOffset);
-				primitiveObj.firstIndex = byteOffset / indexElementSize;
-				primitiveObj.instanceIndex = primitivesToDraw.size();
-				primitiveObj.matIndex = primitive.material;
-				primitiveObj.indexByteOffset = byteOffset;
-				primitiveObj.indexType = (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-				primitivesToDraw.push_back(primitiveObj);
-			}
-		}
+	//			Primitive primitiveObj = {};
+	//			primitiveObj.indexCount = accessor.count;
+	//			unsigned int byteOffset = (accessor.byteOffset + bufferView.byteOffset);
+	//			primitiveObj.firstIndex = byteOffset / indexElementSize;
+	//			primitiveObj.instanceIndex = primitivesToDraw.size();
+	//			primitiveObj.matIndex = primitive.material;
+	//			primitiveObj.indexByteOffset = byteOffset;
+	//			primitiveObj.indexType = (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+	//			primitivesToDraw.push_back(primitiveObj);
+	//		}
+	//	}
 
-	}
+	//}
 
-	void AddBufferByteOffset(tinygltf::Primitive& primitive, int index) {
+	/*void AddBufferByteOffset(tinygltf::Primitive& primitive, int index) {
 		tinygltf::Accessor accessor = model.accessors[model.meshes[0].primitives[index].indices];
 		tinygltf::BufferView bufferView = model.bufferViews[accessor.bufferView];
 		std::array<VkDeviceSize,4> bufferByteOffsetList;
@@ -619,7 +622,7 @@ private:
 			indexType = VK_INDEX_TYPE_UINT32;
 			indexElementSize = sizeof(unsigned int);
 		}
-	}
+	}*/
 
 	void InitializeGraphics()
 	{
@@ -676,7 +679,7 @@ private:
 
 	void InitializeGeometryBuffer()
 	{
-		CreateGeometryBuffer(model.buffers[0].data.data(),model.buffers[0].data.size());
+		CreateGeometryBuffer(importedGeometryBytes.data(), static_cast<unsigned int>(importedGeometryBytes.size()));
 	}
 
 	void InitializeUniformBuffer()
@@ -1147,13 +1150,14 @@ private:
 
 		sceneData.shadowIndex = texData.size();
 		for (int i = 0; i < SHADOW_CASCADE_COUNT; i++) {
-			TextureData shadowTexture = {};
+			TextureData& shadowTexture = texData.emplace_back();
 			shadowTexture.image.image = shadowCascades[i].depthImage.image;
 			shadowTexture.image.imageView = shadowCascades[i].depthImage.imageView;
 			shadowTexture.image.memory = VK_NULL_HANDLE;
-			shadowTexture.sampler = samplers.size();
+
+			shadowTexture.sampler = static_cast<unsigned int>(samplers.size());
 			shadowTexture.ownsImage = false;
-			texData.push_back(shadowTexture);
+			shadowTexture.ownsBuffer = false;
 		}
 		VkSampler sampler = {};
 		CreateSampler(vlk, sampler, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_FILTER_NEAREST, 0.0f, VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK, VK_FALSE, VK_COMPARE_OP_GREATER, VK_FALSE);
@@ -3151,12 +3155,15 @@ private:
 			
 
 			VkBuffer buffers[] = { geometryBuffer.handle, geometryBuffer.handle, geometryBuffer.handle , geometryBuffer.handle };
-			BindGeometryBuffers(commandBuffer);
-			for (int i = 0; i < (int)primitivesToDraw.size(); i++) {
-				VkDeviceSize offsets[] = { bufferByteOffsets[primitivesToDraw[i].instanceIndex][0], bufferByteOffsets[primitivesToDraw[i].instanceIndex][1], bufferByteOffsets[primitivesToDraw[i].instanceIndex][2] ,bufferByteOffsets[primitivesToDraw[i].instanceIndex][3] };
-				vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
+
 			
-				vkCmdDrawIndexed(commandBuffer, primitivesToDraw[i].indexCount, 1, primitivesToDraw[i].firstIndex, primitivesToDraw[i].vertexOffset, primitivesToDraw[i].instanceIndex);
+			for (int i = 0; i < (int)primitivesToDraw.size(); i++) {
+				const Primitive& primitive = primitivesToDraw[i];
+
+				VkDeviceSize offsets[] = { bufferByteOffsets[primitive.instanceIndex][0], bufferByteOffsets[primitive.instanceIndex][1], bufferByteOffsets[primitive.instanceIndex][2] ,bufferByteOffsets[primitive.instanceIndex][3] };
+				vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
+				vkCmdBindIndexBuffer(commandBuffer, geometryBuffer.handle, 0, primitive.indexType);
+				vkCmdDrawIndexed(commandBuffer, primitive.indexCount, 1, primitive.firstIndex, primitive.vertexOffset, primitive.instanceIndex);
 			}
 
 			vkCmdEndRenderPass(commandBuffer);
@@ -3828,7 +3835,14 @@ private:
 			{
 				texture.image.Destroy(device);
 			}
+			else
+			{
+				texture.image.image = VK_NULL_HANDLE;
+				texture.image.imageView = VK_NULL_HANDLE;
+				texture.image.memory = VK_NULL_HANDLE;
+			}
 		}
+		data.clear();
 	}
 
 	void DestroySamplers(std::vector<VkSampler>& data) {
