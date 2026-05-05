@@ -159,6 +159,8 @@ void Renderer::ApplyScene(const Scene& scene) {
 	sceneData.lightColor = float4{ scene.Sun().color.x, scene.Sun().color.y, scene.Sun().color.z, scene.Sun().color.w };
 	sceneData.ambientLightTerm = float4{ scene.Sun().ambient.x, scene.Sun().ambient.y, scene.Sun().ambient.z, scene.Sun().ambient.w };
 
+	originalSunDirection = sceneData.lightDirection;
+
 	GW::MATH::GMATRIXF view = GW::MATH::GIdentityMatrixF;
 	CreateViewMatrix(view);
 	sceneData.viewMatrix = view;
