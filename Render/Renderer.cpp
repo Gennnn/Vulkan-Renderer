@@ -53,7 +53,7 @@ void Renderer::RenderFrame()
 	unsigned int frame = 0;
 	vlk.GetSwapchainCurrentFrame(frame);
 
-	UpdateCamera();
+	UpdateCameraFromScene(*activeScene);
 
 	UpdateSceneData(frame);
 
@@ -161,13 +161,7 @@ void Renderer::ApplyScene(const Scene& scene) {
 
 	originalSunDirection = sceneData.lightDirection;
 
-	GW::MATH::GMATRIXF view = GW::MATH::GIdentityMatrixF;
-	CreateViewMatrix(view);
-	sceneData.viewMatrix = view;
-
-	GW::MATH::GMATRIXF projection = GW::MATH::GIdentityMatrixF;
-	CreatePerspectiveMatrix(projection);
-	sceneData.projectionMatrix = projection;
+	UpdateCameraFromScene(scene);
 
 	const MeshInstance& inst = scene.MeshInstances()[0];
 
@@ -349,6 +343,19 @@ void Renderer::UploadSceneTextures(const Scene& scene) {
 			}
 		}
 	}
+}
+
+void Renderer::UpdateCameraFromScene(const Scene& scene) {
+	const SceneCamera& camera = scene.MainCamera();
+	sceneData.viewMatrix = camera.view;
+	sceneData.projectionMatrix = camera.projection;
+
+	sceneData.cameraWorldPosition = float4{
+		camera.worldPosition.x,
+		camera.worldPosition.y,
+		camera.worldPosition.z,
+		camera.worldPosition.w
+	};
 }
 
 static VkIndexType ConvertToVkIndexType(IndexFormat format) {

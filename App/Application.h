@@ -3,6 +3,10 @@
 #include "RenderConfig.h"
 #include "AppConfig.h"
 #include "../Render/Renderer.h"
+#include "FrameTimer.h"
+#include "CameraController.h"
+#include "../Platform/InputSystem.h"
+
 class Application {
 public:
 	bool Initialize(const AppConfig& appConfig, const RendererConfig& rendererConfig);
@@ -26,6 +30,10 @@ private:
 
 	GltfImporter importer;
 	SceneLoader sceneLoader;
+
+	InputSystem input;
+	CameraController cameraController;
+	FrameTimer frameTimer;
 
 	Renderer* renderer = nullptr;
 };

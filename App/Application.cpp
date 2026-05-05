@@ -12,18 +12,34 @@ bool Application::Initialize(const AppConfig& _appConfig, const RendererConfig& 
 	if (!CreateAppWindow(appConfig)) return false;
 	if (!CreateVulkanSurface()) return false;
 
+	if (!input.Initialize(window)) {
+		std::cout << "Failed to initialize input system.\n";
+		return false;
+	}
+
+	CameraControllerConfig cameraConfig;
+
+	if (!cameraController.Initialize(cameraConfig)) {
+		std::cout << "Failed to initialize camera controller.\n";
+		return false;
+	}
+
 	renderer = new Renderer(window, vulkan, rendererConfig);
 
 	if (!LoadStartupScene(appConfig, rendererConfig)) return false;
+
+	cameraController.InitializeCameraView(scene.MainCamera());
 
 	renderer->SetScene(&scene);
 
 	if (!renderer->InitializeGraphicsForScene(scene)) return false;
 
 	if (!renderer || !renderer->alive) {
-		std::cout << "Renderer failed to initialize." << std::endl;
+		std::cout << "Renderer failed to initialize.\n";
 		return false;
 	}
+
+	frameTimer.Reset();
 
 	return true;
 }
@@ -106,6 +122,8 @@ void Application::Run()
 {
 	while (+window.ProcessWindowEvents() && renderer && renderer->alive)
 	{
+		const float dt = frameTimer.Tick();
+		cameraController.Update(scene.MainCamera(), input, dt);
 		renderer->RenderFrame();
 	}
 }

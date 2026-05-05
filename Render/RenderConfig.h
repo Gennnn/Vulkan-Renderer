@@ -12,8 +12,6 @@ struct RendererConfig {
 	float fovDegrees = 65.0f;
 	float nearPlane = 0.1f;
 	float farPlane = 10000.0f;
-	float lookSens = 160.0f;
-	float cameraSpeed = 5.0f;
 
 	uint32_t shadowCascadeCount = 4;
 	uint32_t shadowMapSize = 2048;

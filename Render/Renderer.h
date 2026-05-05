@@ -105,28 +105,7 @@ class Renderer
 
 	std::vector<VkDescriptorSet> descriptorSets;
 	VkDescriptorPool descriptorPool = nullptr;
-	VkDescriptorSetLayout descriptorSetLayout = nullptr;
-
-	GW::INPUT::GInput inputProxy;
-	GW::INPUT::GController controllerProxy;
-	std::chrono::steady_clock::time_point lastFrameTime;
-	float cumulPitch = 0.0f;
-	bool cursorCaptured = false;
-	struct DIRECTION_INPUT {
-		union {
-			struct {
-				float up;
-				float down;
-				float left;
-				float right;
-				float fwd;
-				float back;
-			};
-			float pressedState[6];
-		};
-	};
-
-	
+	VkDescriptorSetLayout descriptorSetLayout = nullptr;	
 
 	std::vector<std::string> texturePaths;
 	
@@ -290,12 +269,6 @@ public:
 
 		if (+mathProxy.Create()) {
 			sceneData = {};	
-		}
-		if (+controllerProxy.Create()) {
-
-		}
-		if (+inputProxy.Create(win)) {
-
 		}		
 
 		BindShutdownCallback();
@@ -367,7 +340,7 @@ private:
 	}
 
 
-	void CreateViewMatrix(GW::MATH::GMATRIXF& matrix) {
+	/*void CreateViewMatrix(GW::MATH::GMATRIXF& matrix) {
 		GW::MATH::GVECTORF camera = { 0.0f, 3.5f, 0.0f, 1 };
 		sceneData.cameraWorldPosition = float4{ camera.x,camera.y,camera.z };
 		GW::MATH::GVECTORF target = { 0.0f,0.0f,0,1 };
@@ -400,7 +373,7 @@ private:
 		vlk.GetAspectRatio(aspectRatio);
 		float fov = G_DEGREE_TO_RADIAN_F(config.fovDegrees);
 		mathProxy.ProjectionVulkanLHF(fov, aspectRatio, config.farPlane, config.nearPlane, matrix);
-	}
+	}*/
 
 	/*void CreateLightMatrices() {
 		GW::MATH::GVECTORF center = { 0,0,0,1 };
@@ -3202,116 +3175,116 @@ private:
 		vkWaitForFences(device, 1, &bloomFences[frame], VK_TRUE, UINT64_MAX);
 	}
 
-	void UpdateCamera() {
-
-		std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-		float dt = std::chrono::duration<float>(now - lastFrameTime).count();
-		lastFrameTime = now;
-
-		bool focused;
-		win.IsFocus(focused);
-		if (!focused) return;
-		float x = 0.0f;
-#if defined(_WIN32)
-		x = 0;
-		inputProxy.GetState(G_BUTTON_LEFT, x);
-
-		if (!cursorCaptured && x > 0) {
-			LockCursorToWindow();
-			SetCursorPos(windowWidth * 0.5f, windowHeight * 0.5f);
-			return;
-		}
-		inputProxy.GetState(G_KEY_ESCAPE, x);
-		if (cursorCaptured && x > 0) {
-			UnlockCursor();
-			return;
-		}
-		if (cursorCaptured) {
-			SetCursorPos(windowWidth * 0.5f, windowHeight * 0.5f);
-		}
-#endif	
-
-		if (!cursorCaptured) {
-			return;
-		}
-
-
-
-
-		GW::MATH::GMATRIXF viewMatrix = {};
-		mathProxy.InverseF(sceneData.viewMatrix, viewMatrix);
-
-		GW::MATH::GVECTORF translateVector = { 0,0,0,0 };
-		DIRECTION_INPUT kInputs;
-		DIRECTION_INPUT cInputs;
-
-		float y = 0.0f;
-		inputProxy.GetState(G_KEY_SPACE, kInputs.up);
-		inputProxy.GetState(G_KEY_LEFTSHIFT, kInputs.down);
-		controllerProxy.GetState(0, G_RIGHT_TRIGGER_AXIS, cInputs.up);
-		controllerProxy.GetState(0, G_LEFT_TRIGGER_AXIS, cInputs.down);
-		y = kInputs.up - kInputs.down + cInputs.up - cInputs.down;
-
-		x = 0.0f;
-		inputProxy.GetState(G_KEY_D, kInputs.right);
-		inputProxy.GetState(G_KEY_A, kInputs.left);
-		controllerProxy.GetState(0, G_LX_AXIS, cInputs.right);
-		x = kInputs.right - kInputs.left + cInputs.right;
-
-		float z = 0.0f;
-		inputProxy.GetState(G_KEY_W, kInputs.fwd);
-		inputProxy.GetState(G_KEY_S, kInputs.back);
-		controllerProxy.GetState(0, G_LY_AXIS, cInputs.fwd);
-		z = kInputs.fwd - kInputs.back + cInputs.fwd;
-
-		viewMatrix.row4.y += y * config.cameraSpeed * dt;
-
-		translateVector.x = x * dt * config.cameraSpeed;
-		translateVector.z = z * dt * config.cameraSpeed;
-		translateVector.y = 0;
-
-
-
-		mathProxy.TranslateLocalF(viewMatrix, translateVector, viewMatrix);
-		unsigned int windowHeight, windowWidth;
-		win.GetClientHeight(windowHeight);
-
-		x = 0, y = 0;
-		if (inputProxy.GetMouseDelta(x, y) != GW::GReturn::SUCCESS || !focused) {
-			x = 0, y = 0;
-		}
-
-		controllerProxy.GetState(0, G_RY_AXIS, cInputs.up);
-		float thumbSpeed = G_PI_F * dt;
-		float pitchDelta = (dt * config.lookSens * G_DEGREE_TO_RADIAN(config.fovDegrees) * y / windowHeight) + cInputs.up * -thumbSpeed;
-		float newPitch = pitchDelta + cumulPitch;
-		float pitchLimit = G_PI_F * 0.5f;
-		if (newPitch > pitchLimit) newPitch = pitchLimit;
-		if (newPitch < -pitchLimit) newPitch = -pitchLimit;
-		float totalPitch = newPitch - cumulPitch;
-		cumulPitch = newPitch;
-		GW::MATH::GMATRIXF pitchMatrix;
-		mathProxy.RotateXLocalF(GW::MATH::GIdentityMatrixF, totalPitch, pitchMatrix);
-		mathProxy.MultiplyMatrixF(pitchMatrix, viewMatrix, viewMatrix);
-
-		win.GetClientWidth(windowWidth);
-		float aspectRatio = (windowWidth / (float)windowHeight);
-		controllerProxy.GetState(0, G_RX_AXIS, cInputs.right);
-		float totalYaw = G_DEGREE_TO_RADIAN(config.fovDegrees) * aspectRatio * config.lookSens * dt * x / windowWidth + cInputs.right * thumbSpeed;
-		GW::MATH::GMATRIXF yawMatrix;
-		GW::MATH::GVECTORF position = viewMatrix.row4;
-
-		mathProxy.RotateYGlobalF(GW::MATH::GIdentityMatrixF, totalYaw, yawMatrix);
-		mathProxy.MultiplyMatrixF(viewMatrix, yawMatrix, viewMatrix);
-		viewMatrix.row4 = position;
-		sceneData.cameraWorldPosition = float4{ position.x,position.y,position.z, 1 };
-		//manipulation
-		mathProxy.InverseF(viewMatrix, viewMatrix);
-		sceneData.viewMatrix = viewMatrix;
-
-
-
-	}
+//	void UpdateCamera() {
+//
+//		std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+//		float dt = std::chrono::duration<float>(now - lastFrameTime).count();
+//		lastFrameTime = now;
+//
+//		bool focused;
+//		win.IsFocus(focused);
+//		if (!focused) return;
+//		float x = 0.0f;
+//#if defined(_WIN32)
+//		x = 0;
+//		inputProxy.GetState(G_BUTTON_LEFT, x);
+//
+//		if (!cursorCaptured && x > 0) {
+//			LockCursorToWindow();
+//			SetCursorPos(windowWidth * 0.5f, windowHeight * 0.5f);
+//			return;
+//		}
+//		inputProxy.GetState(G_KEY_ESCAPE, x);
+//		if (cursorCaptured && x > 0) {
+//			UnlockCursor();
+//			return;
+//		}
+//		if (cursorCaptured) {
+//			SetCursorPos(windowWidth * 0.5f, windowHeight * 0.5f);
+//		}
+//#endif	
+//
+//		if (!cursorCaptured) {
+//			return;
+//		}
+//
+//
+//
+//
+//		GW::MATH::GMATRIXF viewMatrix = {};
+//		mathProxy.InverseF(sceneData.viewMatrix, viewMatrix);
+//
+//		GW::MATH::GVECTORF translateVector = { 0,0,0,0 };
+//		DIRECTION_INPUT kInputs;
+//		DIRECTION_INPUT cInputs;
+//
+//		float y = 0.0f;
+//		inputProxy.GetState(G_KEY_SPACE, kInputs.up);
+//		inputProxy.GetState(G_KEY_LEFTSHIFT, kInputs.down);
+//		controllerProxy.GetState(0, G_RIGHT_TRIGGER_AXIS, cInputs.up);
+//		controllerProxy.GetState(0, G_LEFT_TRIGGER_AXIS, cInputs.down);
+//		y = kInputs.up - kInputs.down + cInputs.up - cInputs.down;
+//
+//		x = 0.0f;
+//		inputProxy.GetState(G_KEY_D, kInputs.right);
+//		inputProxy.GetState(G_KEY_A, kInputs.left);
+//		controllerProxy.GetState(0, G_LX_AXIS, cInputs.right);
+//		x = kInputs.right - kInputs.left + cInputs.right;
+//
+//		float z = 0.0f;
+//		inputProxy.GetState(G_KEY_W, kInputs.fwd);
+//		inputProxy.GetState(G_KEY_S, kInputs.back);
+//		controllerProxy.GetState(0, G_LY_AXIS, cInputs.fwd);
+//		z = kInputs.fwd - kInputs.back + cInputs.fwd;
+//
+//		viewMatrix.row4.y += y * config.cameraSpeed * dt;
+//
+//		translateVector.x = x * dt * config.cameraSpeed;
+//		translateVector.z = z * dt * config.cameraSpeed;
+//		translateVector.y = 0;
+//
+//
+//
+//		mathProxy.TranslateLocalF(viewMatrix, translateVector, viewMatrix);
+//		unsigned int windowHeight, windowWidth;
+//		win.GetClientHeight(windowHeight);
+//
+//		x = 0, y = 0;
+//		if (inputProxy.GetMouseDelta(x, y) != GW::GReturn::SUCCESS || !focused) {
+//			x = 0, y = 0;
+//		}
+//
+//		controllerProxy.GetState(0, G_RY_AXIS, cInputs.up);
+//		float thumbSpeed = G_PI_F * dt;
+//		float pitchDelta = (dt * config.lookSens * G_DEGREE_TO_RADIAN(config.fovDegrees) * y / windowHeight) + cInputs.up * -thumbSpeed;
+//		float newPitch = pitchDelta + cumulPitch;
+//		float pitchLimit = G_PI_F * 0.5f;
+//		if (newPitch > pitchLimit) newPitch = pitchLimit;
+//		if (newPitch < -pitchLimit) newPitch = -pitchLimit;
+//		float totalPitch = newPitch - cumulPitch;
+//		cumulPitch = newPitch;
+//		GW::MATH::GMATRIXF pitchMatrix;
+//		mathProxy.RotateXLocalF(GW::MATH::GIdentityMatrixF, totalPitch, pitchMatrix);
+//		mathProxy.MultiplyMatrixF(pitchMatrix, viewMatrix, viewMatrix);
+//
+//		win.GetClientWidth(windowWidth);
+//		float aspectRatio = (windowWidth / (float)windowHeight);
+//		controllerProxy.GetState(0, G_RX_AXIS, cInputs.right);
+//		float totalYaw = G_DEGREE_TO_RADIAN(config.fovDegrees) * aspectRatio * config.lookSens * dt * x / windowWidth + cInputs.right * thumbSpeed;
+//		GW::MATH::GMATRIXF yawMatrix;
+//		GW::MATH::GVECTORF position = viewMatrix.row4;
+//
+//		mathProxy.RotateYGlobalF(GW::MATH::GIdentityMatrixF, totalYaw, yawMatrix);
+//		mathProxy.MultiplyMatrixF(viewMatrix, yawMatrix, viewMatrix);
+//		viewMatrix.row4 = position;
+//		sceneData.cameraWorldPosition = float4{ position.x,position.y,position.z, 1 };
+//		//manipulation
+//		mathProxy.InverseF(viewMatrix, viewMatrix);
+//		sceneData.viewMatrix = viewMatrix;
+//
+//
+//
+//	}
 
 
 public:
@@ -3341,7 +3314,7 @@ public:
 
 	
 
-	void LockCursorToWindow() {
+	/*void LockCursorToWindow() {
 #if defined(_WIN32) 
 		bool captured = false;
 		win.IsFocus(captured);
@@ -3376,7 +3349,7 @@ public:
 		cursorCaptured = false;
 		while (ShowCursor(TRUE) < 0);
 #endif
-	}
+	}*/
 
 	
 
@@ -3407,6 +3380,8 @@ private:
 
 		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 	}
+
+	void UpdateCameraFromScene(const Scene& scene);
 
 	void SubmitShadowPass(unsigned int frame) {
 		VkSubmitInfo submitInfo = {};
