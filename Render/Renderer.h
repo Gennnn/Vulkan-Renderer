@@ -7,6 +7,8 @@
 #include "../FileIntoString.h"
 #include "../TextureUtils.h"
 #include "../Materials/TextureUtilsKTX.h"
+#include "../Scene/Texture.h"
+#include "../Scene/Material.h"
 
 #include <dxcapi.h>
 #include <wrl/client.h>
@@ -27,6 +29,7 @@ using namespace GW::GRAPHICS;
 #include <Vulkan/VulkanRenderTarget.h>
 #include <ImportedScene.h>
 #include <GltfImporter.h>
+#include <SceneLoader.h>
 
 #define SHADOW_CASCADE_COUNT 4
 
@@ -123,26 +126,7 @@ class Renderer
 		};
 	};
 
-	struct TextureData
-	{
-		VkBuffer buffer = VK_NULL_HANDLE;
-		VkDeviceMemory bufferMemory = VK_NULL_HANDLE;
-
-		VulkanImage image;
-
-		unsigned int sampler = 0;
-
-		bool ownsImage = true;
-		bool ownsBuffer = false;
-
-		TextureData() = default;
-
-		TextureData(const TextureData&) = delete;
-		TextureData& operator=(const TextureData&) = delete;
-
-		TextureData(TextureData&&) noexcept = default;
-		TextureData& operator=(TextureData&&) noexcept = default;
-	};
+	
 
 	std::vector<std::string> texturePaths;
 	
@@ -190,17 +174,7 @@ class Renderer
 
 	std::vector<double> scale;
 	
-	struct Material {
-		float4 baseColorFactor = { 1,1,1,1 };
-		unsigned int normalIndex;
-		unsigned int baseColorIndex;
-		unsigned int metallicRoughnessIndex;
-		unsigned int alphaMode;
-		float alphaCutoff;
-		float transmissionFactor;
-		unsigned int pad0;
-		unsigned int pad1;
-	};
+	
 
 	std::vector<Material> materialData;
 	
@@ -210,7 +184,6 @@ class Renderer
 	std::vector<std::array<VkDeviceSize, 4>> bufferByteOffsets;
 
 	
-	VkSampler shadowSampler;
 	VkRenderPass shadowRenderPass;
 	VkPipeline shadowPipeline;
 	unsigned int shadowMapSize = 0;
@@ -298,6 +271,8 @@ class Renderer
 
 	BloomPushConstants bloomPushConstants{};
 
+	Scene* activeScene = nullptr;
+
 public:
 	bool alive = true;
 
@@ -309,63 +284,31 @@ public:
 
 		startTime = std::chrono::steady_clock::now();
 
-		texturePaths = { config.brdfLutPath, config.diffuseIrradiancePath, config.specularPrefilterPath, config.skyboxPath };
-
 		shadowMapSize = config.shadowMapSize;
 
-		GltfImporter importer;
-		ImportedScene imported = importer.Load(config.startupScenePath);
-
-		ApplyImportedScene(imported);
-		UploadImportedTextures(imported);
-
 		UpdateWindowDimensions();
+
 		if (+mathProxy.Create()) {
-			GW::MATH::GMATRIXF matrix = GW::MATH::GIdentityMatrixF;
-			sceneData = {};
-
-			CreateViewMatrix(matrix);
-			sceneData.viewMatrix = matrix;
-
-			CreatePerspectiveMatrix(matrix);
-			sceneData.projectionMatrix = matrix;
-
-			float4 lightDir = { -0.972604,-0.227954,-0.0455908 };
-			float magnitude = sqrtf(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
-			lightDir.x /= magnitude;
-			lightDir.y /= magnitude;
-			lightDir.z /= magnitude;
-
-			originalSunDirection = lightDir;
-
-			sceneData.lightDirection = originalSunDirection;
-
-			sceneData.lightColor = { 0.998528f,0.980959f,0.396452f };
-
-			sceneData.ambientLightTerm = { 0.2f, 0.2f, 0.2f };
+			sceneData = {};	
 		}
 		if (+controllerProxy.Create()) {
 
 		}
 		if (+inputProxy.Create(win)) {
 
-		}
-		scale = imported.rootScale;
-		
-		LoadEnvironmentTextures();
+		}		
 
-		BuildInitialObjectData();
-
-		InitializeGraphics();
 		BindShutdownCallback();
 	}
-
+	
+	bool InitializeGraphicsForScene(const Scene& scene);
+	void SetScene(Scene* scene);
 
 
 private:
-
-	void ApplyImportedScene(const ImportedScene& imported);
-	void UploadImportedTextures(const ImportedScene& imported);
+	void ApplyScene(const Scene& scene);
+	//void ApplyImportedScene(const ImportedScene& imported);
+	void UploadSceneTextures(const Scene& scene);
 
 	void LoadEnvironmentTextures() {
 		for (int i = 0; i < texturePaths.size(); i++) {
@@ -624,7 +567,7 @@ private:
 		}
 	}*/
 
-	void InitializeGraphics()
+	/*void InitializeGraphics()
 	{
 		GetHandlesFromSurface();
 		InitializeGeometryBuffer();
@@ -651,7 +594,7 @@ private:
 		UpdateDescriptorSets();
 
 		CreateBloomDescriptorSets();
-	}
+	}*/
 
 	void GetHandlesFromSurface()
 	{
@@ -679,7 +622,7 @@ private:
 
 	void InitializeGeometryBuffer()
 	{
-		CreateGeometryBuffer(importedGeometryBytes.data(), static_cast<unsigned int>(importedGeometryBytes.size()));
+		CreateGeometryBuffer(activeScene->GeometryBufferBytes().data(), static_cast<unsigned int>(activeScene->GeometryBufferBytes().size()));
 	}
 
 	void InitializeUniformBuffer()
@@ -1133,7 +1076,7 @@ private:
 		bloomSamplerIndex = (unsigned int)(samplers.size() - 1);
 	}
 
-	void InitalizeBloomPass() {
+	void InitializeBloomPass() {
 		CreateBloomImages();
 		CreatePostSampler();
 		CreateBloomRenderPass();
@@ -3442,10 +3385,12 @@ public:
 
 private:
 
-	void Render(unsigned int currentFrame) {
+	void Render(unsigned int currentFrame)
+	{
 		UpdateWindowDimensions();
 
 		QueueBloomCommand(currentFrame);
+
 		SubmitBloomCommand(currentFrame);
 
 		VkCommandBuffer commandBuffer = GetCurrentCommandBuffer(currentFrame);
@@ -3458,7 +3403,7 @@ private:
 
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomCompositePipeline);
 
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomCompositePipelineLayout, 0, 1, &bloomCompositeSets[currentFrame], 0, nullptr);
+		vkCmdBindDescriptorSets(commandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,bloomCompositePipelineLayout,0,1,&bloomCompositeSets[currentFrame],0,nullptr);
 
 		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 	}
@@ -3520,10 +3465,14 @@ private:
 			vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
 
 			for (int i = 0; i < primitivesToDraw.size(); i++) {
-				VkDeviceSize offsets[] = { bufferByteOffsets[primitivesToDraw[i].instanceIndex][0], bufferByteOffsets[primitivesToDraw[i].instanceIndex][1], bufferByteOffsets[primitivesToDraw[i].instanceIndex][2] ,bufferByteOffsets[primitivesToDraw[i].instanceIndex][3] };
-				vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
+				const Primitive& primitive = primitivesToDraw[i];
 
-				vkCmdDrawIndexed(commandBuffer, primitivesToDraw[i].indexCount, 1, primitivesToDraw[i].firstIndex, primitivesToDraw[i].vertexOffset, primitivesToDraw[i].instanceIndex);
+				VkDeviceSize offsets[] = { bufferByteOffsets[primitive.instanceIndex][0], bufferByteOffsets[primitive.instanceIndex][1], bufferByteOffsets[primitive.instanceIndex][2] ,bufferByteOffsets[primitive.instanceIndex][3] };
+				VkBuffer buffers[] = { geometryBuffer.handle, geometryBuffer.handle, geometryBuffer.handle, geometryBuffer.handle };
+
+				vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers, offsets);
+				vkCmdBindIndexBuffer(commandBuffer, geometryBuffer.handle, 0, primitive.indexType);
+				vkCmdDrawIndexed(commandBuffer, primitive.indexCount, 1, primitive.firstIndex, primitive.vertexOffset, primitive.instanceIndex);
 			}
 			vkCmdEndRenderPass(commandBuffer);
 		}
@@ -3846,9 +3795,14 @@ private:
 	}
 
 	void DestroySamplers(std::vector<VkSampler>& data) {
-		for (int i = 0; i < data.size(); i++) {
-			vkDestroySampler(device, data[i], nullptr);
+		for (VkSampler& sampler : data) {
+			if (sampler != VK_NULL_HANDLE) {
+				vkDestroySampler(device, sampler, nullptr);
+				sampler = VK_NULL_HANDLE;
+			}
 		}
+
+		data.clear();
 	}
 
 	//Cleanup callback function (passed to VKSurface, will be called when the pipeline shuts down)

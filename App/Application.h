@@ -9,6 +9,8 @@ public:
 	void Run();
 	void Shutdown();
 private:
+	bool LoadStartupScene(const AppConfig& appConfig, const RendererConfig& rendererConfig);
+	void ApplyyEnvironmentToScene(const RendererConfig& rendererConfig);
 	bool CreateAppWindow(const AppConfig& appConfig);
 	bool CreateVulkanSurface();
 private:
@@ -18,6 +20,12 @@ private:
 	GW::SYSTEM::GWindow window;
 	GW::CORE::GEventResponder windowEvents;
 	GW::GRAPHICS::GVulkanSurface vulkan;
+
+	ImportedScene importedScene;
+	Scene scene;
+
+	GltfImporter importer;
+	SceneLoader sceneLoader;
 
 	Renderer* renderer = nullptr;
 };

@@ -14,12 +14,44 @@ bool Application::Initialize(const AppConfig& _appConfig, const RendererConfig& 
 
 	renderer = new Renderer(window, vulkan, rendererConfig);
 
+	if (!LoadStartupScene(appConfig, rendererConfig)) return false;
+
+	renderer->SetScene(&scene);
+
+	if (!renderer->InitializeGraphicsForScene(scene)) return false;
+
 	if (!renderer || !renderer->alive) {
 		std::cout << "Renderer failed to initialize." << std::endl;
 		return false;
 	}
 
 	return true;
+}
+
+bool Application::LoadStartupScene(const AppConfig& _appConfig, const RendererConfig& _rendererConfig) {
+	SceneLoaderInfo loaderInfo;
+
+	loaderInfo.defaultFOV = _rendererConfig.fovDegrees;
+	loaderInfo.defaultNear = _rendererConfig.nearPlane;
+	loaderInfo.defaultFar = _rendererConfig.farPlane;
+	loaderInfo.defaultAspect = static_cast<float>(_appConfig.windowWidth) / static_cast<float>(_appConfig.windowHeight);
+
+	importedScene = importer.Load(_rendererConfig.startupScenePath);
+
+	scene = sceneLoader.BuildSceneFromImported(importedScene, loaderInfo);
+
+	ApplyyEnvironmentToScene(_rendererConfig);
+
+	return true;
+}
+
+static TextureID AddSceneTexture(Scene& scene, const std::string& path, bool isCubeMap, bool isSrgb);
+
+void Application::ApplyyEnvironmentToScene(const RendererConfig& rendererConfig) {
+	scene.Environment().brdfLut = AddSceneTexture(scene, rendererConfig.brdfLutPath, false, false);
+	scene.Environment().diffuseIrradiance = AddSceneTexture(scene, rendererConfig.diffuseIrradiancePath, true, false);
+	scene.Environment().specularPrefilter = AddSceneTexture(scene, rendererConfig.specularPrefilterPath, true, false);
+	scene.Environment().skybox = AddSceneTexture(scene, rendererConfig.skyboxPath, true, false);
 }
 
 bool Application::CreateAppWindow(const AppConfig& config) {
@@ -48,7 +80,7 @@ bool Application::CreateVulkanSurface() {
 #ifndef NDEBUG
 	const char* debugLayers[] = { "VK_LAYER_KHRONOS_validation" };
 
-	const char* setting_debug_action[] = { "VK_DBG_LAYER_ACTION_LOG_MSG", "VK_DBG_LAYER_ACTION_DEBUG_OUTPUT", "VK_DBG_LAYER_ACTION_BREAK" };
+	const char* setting_debug_action[] = { "VK_DBG_LAYER_ACTION_LOG_MSG", "VK_DBG_LAYER_ACTION_DEBUG_OUTPUT", /*"VK_DBG_LAYER_ACTION_BREAK"*/ };
 
 	const VkLayerSettingEXT layerSettings = {
 		debugLayers[0], "debug_action", VK_LAYER_SETTING_TYPE_STRING_EXT, static_cast<uint32_t>(std::size(setting_debug_action)), setting_debug_action
@@ -85,4 +117,19 @@ void Application::Shutdown()
 		delete renderer;
 		renderer = nullptr;
 	}
+}
+
+static TextureID AddSceneTexture(Scene& scene, const std::string& path, bool isCubeMap, bool isSrgb) {
+	if (path.empty()) return InvalidSceneIndex;
+
+	TextureID id = static_cast<TextureID>(scene.Textures().size());
+
+	TextureAsset texture;
+	texture.sourcePath = path;
+	texture.isCubeMap = isCubeMap;
+	texture.isSrgb = isSrgb;
+
+	scene.Textures().push_back(texture);
+
+	return id;
 }

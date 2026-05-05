@@ -117,8 +117,7 @@ ImportedScene GltfImporter::Load(const std::filesystem::path& gltfPath) {
 				continue;
 			}
 
-			const tinygltf::Accessor& indexAccessor =
-				model.accessors[primitive.indices];
+			const tinygltf::Accessor& indexAccessor = model.accessors[primitive.indices];
 
 			if (indexAccessor.bufferView < 0)
 			{
@@ -126,31 +125,25 @@ ImportedScene GltfImporter::Load(const std::filesystem::path& gltfPath) {
 				continue;
 			}
 
-			const tinygltf::BufferView& indexBufferView =
-				model.bufferViews[indexAccessor.bufferView];
+			const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccessor.bufferView];
 
 			ImportedPrimitive importedPrimitive = {};
 
-			importedPrimitive.indexCount =
-				static_cast<uint32_t>(indexAccessor.count);
+			importedPrimitive.indexCount = static_cast<uint32_t>(indexAccessor.count);
 
-			importedPrimitive.indexByteOffset =
-				static_cast<uint32_t>(indexBufferView.byteOffset + indexAccessor.byteOffset);
+			importedPrimitive.indexByteOffset = static_cast<uint32_t>(indexBufferView.byteOffset + indexAccessor.byteOffset);
 
-			const uint32_t indexElementSize =
-				GetIndexElementSize(indexAccessor.componentType);
+			const uint32_t indexElementSize = GetIndexElementSize(indexAccessor.componentType);
 
-			importedPrimitive.firstIndex =
-				importedPrimitive.indexByteOffset / indexElementSize;
+			importedPrimitive.firstIndex = importedPrimitive.indexByteOffset / indexElementSize;
 
-			importedPrimitive.indexType =
-				GetVkIndexType(indexAccessor.componentType);
+			importedPrimitive.indexType = GetVkIndexType(indexAccessor.componentType);
 
-			importedPrimitive.materialIndex =
-				primitive.material;
+			importedPrimitive.materialIndex = primitive.material;
 
-			importedPrimitive.instanceIndex =
-				primitiveIndex;
+			importedPrimitive.instanceIndex = primitiveIndex;
+
+			importedPrimitive.vertexOffset = 0;
 
 			auto readAttribute = [&](const char* name, int slot)
 				{
@@ -179,14 +172,11 @@ ImportedScene GltfImporter::Load(const std::filesystem::path& gltfPath) {
 						return;
 					}
 
-					const tinygltf::BufferView& bufferView =
-						model.bufferViews[accessor.bufferView];
+					const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
 
-					importedPrimitive.vertexAttributeByteOffsets[slot] =
-						static_cast<VkDeviceSize>(bufferView.byteOffset + accessor.byteOffset);
+					importedPrimitive.vertexAttributeByteOffsets[slot] = static_cast<VkDeviceSize>(bufferView.byteOffset + accessor.byteOffset);
 
-					importedPrimitive.vertexBindingStrides[slot] =
-						static_cast<uint32_t>(accessor.ByteStride(bufferView));
+					importedPrimitive.vertexBindingStrides[slot] = static_cast<uint32_t>(accessor.ByteStride(bufferView));
 				};
 
 			readAttribute("POSITION", 0);
@@ -213,12 +203,9 @@ ImportedAlphaMode GltfImporter::ConvertAlphaMode(const std::string& alphaMode)
 	return ImportedAlphaMode::Opaque;
 }
 
-std::string GltfImporter::ResolveTexturePath(
-	const std::filesystem::path& gltfPath,
-	const std::string& imageUri)
+std::string GltfImporter::ResolveTexturePath(const std::filesystem::path& gltfPath, const std::string& imageUri)
 {
-	if (imageUri.empty())
-		return {};
+	if (imageUri.empty()) return {};
 
 	std::filesystem::path parent = gltfPath.parent_path();
 	std::filesystem::path resolved = parent / imageUri;

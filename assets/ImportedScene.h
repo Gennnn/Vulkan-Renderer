@@ -6,12 +6,7 @@
 #include <cstdint>
 #include <vulkan/vulkan.h>
 
-struct ImportedFloat4 {
-	float x = 0;
-	float y = 0;
-	float z = 0;
-	float w = 0;
-};
+#include "GatewareConfig.h"
 
 enum class ImportedAlphaMode : uint32_t {
 	Opaque = 0,
@@ -34,6 +29,8 @@ struct ImportedPrimitive {
 
 	std::array<VkDeviceSize, 4> vertexAttributeByteOffsets{};
 	std::array<uint32_t, 4> vertexBindingStrides{};
+
+	uint32_t vertexOffset = 0;
 };
 
 struct ImportedTexture
@@ -55,7 +52,7 @@ struct ImportedMaterial {
 	int metallicRoughnessTextureIndex = -1;
 	int normalTextureIndex = -1;
 
-	ImportedFloat4 baseColorFactor = { 1, 1, 1, 1 };
+	GW::MATH::GVECTORF baseColorFactor = { 1, 1, 1, 1 };
 
 	ImportedAlphaMode alphaMode = ImportedAlphaMode::Opaque;
 	float alphaCutoff = 0.5f;
